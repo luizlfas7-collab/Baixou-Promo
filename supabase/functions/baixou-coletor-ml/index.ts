@@ -135,14 +135,16 @@ async function processarItem(
 
   await supabase.rpc("ml_item_observado", { p_id: observado.id })
 
-  if (pontuacao.total < pontuacaoMinima) {
+  if (pontuacao.recusa !== null || pontuacao.total < pontuacaoMinima) {
     resumo.recusados += 1
     resumo.detalhes.push({
       item: item.id,
-      situacao: "pontuacao_baixa",
+      situacao: pontuacao.recusa ?? "pontuacao_baixa",
       pontuacao: pontuacao.total,
       minima: pontuacaoMinima,
-      faltando: pontuacao.faltando,
+      cobertura: Number(pontuacao.cobertura.toFixed(2)),
+      componentes: pontuacao.componentes,
+      ausentes: pontuacao.ausentes,
     })
     return
   }

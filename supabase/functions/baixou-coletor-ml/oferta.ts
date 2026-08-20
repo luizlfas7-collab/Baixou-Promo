@@ -5,6 +5,16 @@ import type { AvaliacaoMl, ItemMl, ReputacaoVendedor } from "./mercadolivre.ts"
 const LIMITE_LEGENDA = 1024
 const LIMITE_TITULO = 120
 
+/**
+ * Piso de evidencia. Abaixo disso a nota nao significa nada, porque foi
+ * calculada sobre poucos sinais.
+ */
+const COBERTURA_MINIMA = 0.70
+
+/** Desconto verificado onde a nota comeca e onde satura. */
+const DESCONTO_PISO = 15
+const DESCONTO_TETO = 30
+
 export type Sinais = {
   item: ItemMl
   avaliacao: AvaliacaoMl
@@ -15,8 +25,10 @@ export type Sinais = {
 
 export type Pontuacao = {
   total: number
+  cobertura: number
   componentes: Record<string, number>
-  faltando: string[]
+  ausentes: string[]
+  recusa: string | null
 }
 
 const dinheiro = new Intl.NumberFormat("pt-BR", {
@@ -24,48 +36,113 @@ const dinheiro = new Intl.NumberFormat("pt-BR", {
   currency: "BRL",
 })
 
+function entre(valor: number, minimo: number, maximo: number): number {
+  return Math.min(Math.max(valor, minimo), maximo)
+}
+
+type Componente = {
+  nome: string
+  peso: number
+  /** 0 a 1. So e lido quando o sinal esta disponivel. */
+  fracao: number
+  disponivel: boolean
+}
+
 /**
- * Cem pontos divididos entre o que da para provar. O peso maior fica no
- * desconto verificado de proposito: e o unico sinal que nasce do nosso
- * proprio historico, e nao do que o vendedor afirma.
+ * Nota sobre o que deu para observar, e nao sobre uma lista fixa.
  *
- * A regua de corte mora no banco (aprovacao_pontuacao_minima, hoje 88), o que
- * exige quase tudo alto ao mesmo tempo. E deliberado: publicar pouco e bom e
- * melhor do que publicar muito e mediano.
+ * O motor de referencia somava componentes de peso fixo e dava zero no que
+ * faltava. O efeito colateral e traicoeiro: no dia em que um endpoint do
+ * fornecedor muda, aquele componente vira zero permanente, a nota nunca mais
+ * alcanca o corte, e a coleta "funciona" publicando nada. Foi assim que o
+ * Radar Rota passou 34 dias vivo sem publicar.
+ *
+ * Aqui o denominador e a soma dos pesos DISPONIVEIS. Sinal que sumiu sai da
+ * conta e aparece em `ausentes`; se sumir sinal demais, a rodada recusa por
+ * cobertura baixa, alto e claro, em vez de silenciosamente nunca aprovar.
  */
 export function pontuar({ item, avaliacao, reputacao, descontoVerificado }: Sinais): Pontuacao {
-  const componentes: Record<string, number> = {}
-  const faltando: string[] = []
-
-  // Desconto verificado: 0 em 15%, cheio em 40%.
-  if (descontoVerificado === null) {
-    componentes.desconto = 0
-    faltando.push("desconto_verificado")
-  } else {
-    const faixa = Math.min(Math.max(descontoVerificado - 15, 0), 25)
-    componentes.desconto = Math.round((faixa / 25) * 40)
+  // O desconto verificado nao entra no rateio: ele e a propria tese do post.
+  // Sem ele nao existe oferta, existe so um produto.
+  if (descontoVerificado === null || descontoVerificado < DESCONTO_PISO) {
+    return {
+      total: 0,
+      cobertura: 0,
+      componentes: {},
+      ausentes: ["desconto_verificado"],
+      recusa: "sem_desconto_verificado",
+    }
   }
 
-  componentes.reputacao = reputacao.verde ? 15 : 0
-  if (!reputacao.nivel) faltando.push("reputacao_vendedor")
+  const componentes: Componente[] = [
+    {
+      nome: "desconto",
+      peso: 30,
+      fracao: entre((descontoVerificado - DESCONTO_PISO) / (DESCONTO_TETO - DESCONTO_PISO), 0, 1),
+      disponivel: true,
+    },
+    {
+      nome: "reputacao",
+      peso: 18,
+      fracao: reputacao.verde ? 1 : 0,
+      disponivel: reputacao.nivel !== null,
+    },
+    {
+      nome: "avaliacao",
+      peso: 22,
+      // Nota alta sozinha nao basta: precisa de gente suficiente avaliando.
+      fracao: avaliacao.nota === null
+        ? 0
+        : entre((avaliacao.nota - 4.0) / 1.0, 0, 1) * 0.7 +
+          entre(avaliacao.total / 50, 0, 1) * 0.3,
+      disponivel: avaliacao.nota !== null && avaliacao.total >= 10,
+    },
+    {
+      nome: "condicao",
+      peso: 12,
+      fracao: (item.novo ? 0.6 : 0) + (item.disponivel ? 0.4 : 0),
+      disponivel: true,
+    },
+    {
+      nome: "tracao",
+      peso: 10,
+      fracao: entre(item.vendidos / 100, 0, 1),
+      disponivel: true,
+    },
+    {
+      nome: "frete",
+      peso: 8,
+      fracao: item.freteGratis ? 1 : 0,
+      disponivel: true,
+    },
+  ]
 
-  // Avaliacao: precisa de nota alta E de gente suficiente avaliando.
-  if (avaliacao.nota === null || avaliacao.total < 10) {
-    componentes.avaliacao = 0
-    faltando.push("avaliacao_produto")
-  } else {
-    const porNota = Math.min(Math.max((avaliacao.nota - 4.0) / 1.0, 0), 1) * 14
-    const porVolume = Math.min(avaliacao.total / 50, 1) * 6
-    componentes.avaliacao = Math.round(porNota + porVolume)
+  const disponiveis = componentes.filter((c) => c.disponivel)
+  const pesoDisponivel = disponiveis.reduce((soma, c) => soma + c.peso, 0)
+  const pesoTotal = componentes.reduce((soma, c) => soma + c.peso, 0)
+  const cobertura = pesoDisponivel / pesoTotal
+
+  const detalhe: Record<string, number> = {}
+  for (const c of disponiveis) {
+    detalhe[c.nome] = Math.round(c.peso * c.fracao)
   }
 
-  componentes.condicao = (item.novo ? 6 : 0) + (item.disponivel ? 4 : 0)
-  componentes.tracao = Math.round(Math.min(item.vendidos / 100, 1) * 10)
-  componentes.frete = item.freteGratis ? 5 : 0
+  const ausentes = componentes.filter((c) => !c.disponivel).map((c) => c.nome)
 
-  const total = Object.values(componentes).reduce((soma, valor) => soma + valor, 0)
+  if (cobertura < COBERTURA_MINIMA) {
+    return {
+      total: 0,
+      cobertura,
+      componentes: detalhe,
+      ausentes,
+      recusa: "cobertura_insuficiente",
+    }
+  }
 
-  return { total: Math.min(total, 100), componentes, faltando }
+  const ganho = disponiveis.reduce((soma, c) => soma + c.peso * c.fracao, 0)
+  const total = Math.round((ganho / pesoDisponivel) * 100)
+
+  return { total, cobertura, componentes: detalhe, ausentes, recusa: null }
 }
 
 function escaparHtml(texto: string): string {
