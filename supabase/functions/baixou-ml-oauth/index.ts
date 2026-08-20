@@ -159,6 +159,13 @@ Deno.serve(async (requisicao: Request) => {
   } | undefined
 
   if (erroCredenciais || !credencial?.client_id || !credencial.client_secret) {
+    console.error("[baixou-oauth] credenciais incompletas", JSON.stringify({
+      erro: erroCredenciais?.message ?? null,
+      codigoErro: erroCredenciais?.code ?? null,
+      temLinha: Boolean(credencial),
+      temClientId: Boolean(credencial?.client_id),
+      temSecret: Boolean(credencial?.client_secret),
+    }))
     return responderHtml(
       409,
       "Credenciais incompletas",
@@ -212,6 +219,7 @@ Deno.serve(async (requisicao: Request) => {
   if (!resposta.ok) {
     // A mensagem do provedor ajuda, e aqui ela nao contem segredo.
     const detalhe = String(dados.error_description ?? dados.message ?? dados.error ?? resposta.status)
+    console.error("[baixou-oauth] troca recusada", JSON.stringify({ http: resposta.status, detalhe }))
     return responderHtml(
       resposta.status === 400 ? 400 : 502,
       "O Mercado Livre recusou a troca",
@@ -231,10 +239,15 @@ Deno.serve(async (requisicao: Request) => {
   // Sem offline_access nao vem refresh, e a automacao morreria em 6 horas.
   // Melhor recusar agora, alto e claro, do que descobrir na madrugada.
   if (!refreshToken) {
+    console.error("[baixou-oauth] sem refresh_token", JSON.stringify({
+      escopos: typeof dados.scope === "string" ? dados.scope : null,
+      chavesRecebidas: Object.keys(dados).sort(),
+    }))
     return responderHtml(
       409,
       "Falta o escopo offline_access",
       "O Mercado Livre autorizou mas nao devolveu refresh_token. Habilite o escopo offline_access na aplicacao e conecte de novo.",
+      typeof dados.scope === "string" ? `escopos concedidos: ${dados.scope}` : "nenhum escopo informado",
     )
   }
 
