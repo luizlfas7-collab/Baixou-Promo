@@ -17,40 +17,41 @@ function exigirVariavel(nome: string): string {
   return valor
 }
 
-/** Pagina simples, sem recurso externo: o navegador so precisa ler isto. */
-function pagina(titulo: string, mensagem: string, detalhe = ""): string {
-  const escapar = (texto: string) =>
-    texto.replace(/[&<>"']/g, (c) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string
-    )
+/**
+ * Texto puro, sem acento.
+ *
+ * O gateway das Edge Functions reescreve o content-type para text/plain,
+ * entao HTML chega ao navegador como codigo cru; e text/plain sem charset faz
+ * o navegador adivinhar a codificacao, o que transformava o travessao em
+ * lixo. Texto ASCII resolve os dois de uma vez.
+ */
+function responderTexto(
+  status: number,
+  titulo: string,
+  mensagem: string,
+  detalhe = "",
+): Response {
+  const corpo = [
+    `BAIXOU  |  ${titulo}`,
+    "-".repeat(Math.min(titulo.length + 11, 70)),
+    "",
+    mensagem,
+    ...(detalhe ? ["", detalhe] : []),
+    "",
+  ].join("\n")
 
-  return `<!doctype html>
-<html lang="pt-BR"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escapar(titulo)} — Baixou</title>
-<style>
-  :root { color-scheme: light dark; }
-  body { font: 16px/1.6 system-ui, sans-serif; max-width: 34rem;
-         margin: 4rem auto; padding: 0 1.5rem; }
-  h1 { font-size: 1.4rem; margin-bottom: .5rem; }
-  p { margin: .5rem 0; }
-  code { background: rgba(128,128,128,.18); padding: .1rem .35rem; border-radius: .25rem; }
-</style></head>
-<body><h1>${escapar(titulo)}</h1><p>${escapar(mensagem)}</p>
-${detalhe ? `<p><code>${escapar(detalhe)}</code></p>` : ""}
-</body></html>`
-}
-
-function responderHtml(status: number, titulo: string, mensagem: string, detalhe = ""): Response {
-  return new Response(pagina(titulo, mensagem, detalhe), {
+  return new Response(corpo, {
     status,
-    headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      "cache-control": "no-store",
+    },
   })
 }
 
 Deno.serve(async (requisicao: Request) => {
   if (requisicao.method !== "GET") {
-    return responderHtml(405, "Metodo nao permitido", "Este endereco responde apenas a GET.")
+    return responderTexto(405, "Metodo nao permitido", "Este endereco responde apenas a GET.")
   }
 
   let supabase
@@ -62,7 +63,7 @@ Deno.serve(async (requisicao: Request) => {
     )
   } catch (erro) {
     console.error("configuracao incompleta:", erro instanceof Error ? erro.message : erro)
-    return responderHtml(500, "Funcao mal configurada", "Faltam variaveis de ambiente.")
+    return responderTexto(500, "Funcao mal configurada", "Faltam variaveis de ambiente.")
   }
 
   const url = new URL(requisicao.url)
@@ -76,7 +77,7 @@ Deno.serve(async (requisicao: Request) => {
   if (url.searchParams.get("acao") === "estado") {
     const { data, error } = await supabase.rpc("ml_conexao_estado")
     if (error) {
-      return responderHtml(500, "Nao foi possivel ler o estado", error.message)
+      return responderTexto(500, "Nao foi possivel ler o estado", error.message)
     }
     return new Response(JSON.stringify(data, null, 2), {
       status: 200,
@@ -89,7 +90,7 @@ Deno.serve(async (requisicao: Request) => {
   // ---------------------------------------------------------------------
   if (erroMl) {
     const descricao = url.searchParams.get("error_description") ?? ""
-    return responderHtml(
+    return responderTexto(
       400,
       "Autorizacao recusada",
       "O Mercado Livre nao concluiu a autorizacao. Comece de novo abrindo este mesmo endereco sem parametros.",
@@ -104,7 +105,7 @@ Deno.serve(async (requisicao: Request) => {
     const { data, error } = await supabase.rpc("oauth_ml_iniciar")
 
     if (error) {
-      return responderHtml(
+      return responderTexto(
         409,
         "Aplicacao ainda nao configurada",
         "Grave o client_id e o client_secret antes de conectar.",
@@ -120,7 +121,7 @@ Deno.serve(async (requisicao: Request) => {
     } | undefined
 
     if (!inicio?.estado) {
-      return responderHtml(500, "Falha ao iniciar", "O banco nao devolveu o par de autorizacao.")
+      return responderTexto(500, "Falha ao iniciar", "O banco nao devolveu o par de autorizacao.")
     }
 
     // O escopo vai na requisicao, e nao so na configuracao da aplicacao: o
@@ -156,7 +157,7 @@ Deno.serve(async (requisicao: Request) => {
   // Volta do Mercado Livre: troca o codigo pelos tokens.
   // ---------------------------------------------------------------------
   if (!estado) {
-    return responderHtml(400, "Retorno incompleto", "O Mercado Livre voltou sem o state.")
+    return responderTexto(400, "Retorno incompleto", "O Mercado Livre voltou sem o state.")
   }
 
   const { data: verificador, error: erroEstado } = await supabase.rpc("oauth_ml_resgatar", {
@@ -165,7 +166,7 @@ Deno.serve(async (requisicao: Request) => {
 
   if (erroEstado || typeof verificador !== "string") {
     // Consumir o state apaga a pendencia: repetir o mesmo callback cai aqui.
-    return responderHtml(
+    return responderTexto(
       400,
       "State invalido ou ja usado",
       "Esta autorizacao venceu ou ja foi concluida. Abra este endereco sem parametros para comecar de novo.",
@@ -188,7 +189,7 @@ Deno.serve(async (requisicao: Request) => {
       temClientId: Boolean(credencial?.client_id),
       temSecret: Boolean(credencial?.client_secret),
     }))
-    return responderHtml(
+    return responderTexto(
       409,
       "Credenciais incompletas",
       "O client_secret nao esta no cofre. Grave-o antes de concluir a conexao.",
@@ -221,7 +222,7 @@ Deno.serve(async (requisicao: Request) => {
       redirect: "error",
     })
   } catch (erro) {
-    return responderHtml(
+    return responderTexto(
       502,
       "Falha de rede",
       "Nao foi possivel falar com o Mercado Livre. Tente de novo.",
@@ -235,14 +236,14 @@ Deno.serve(async (requisicao: Request) => {
   try {
     dados = await resposta.json()
   } catch {
-    return responderHtml(502, "Resposta ilegivel", `O Mercado Livre respondeu HTTP ${resposta.status}.`)
+    return responderTexto(502, "Resposta ilegivel", `O Mercado Livre respondeu HTTP ${resposta.status}.`)
   }
 
   if (!resposta.ok) {
     // A mensagem do provedor ajuda, e aqui ela nao contem segredo.
     const detalhe = String(dados.error_description ?? dados.message ?? dados.error ?? resposta.status)
     console.error("[baixou-oauth] troca recusada", JSON.stringify({ http: resposta.status, detalhe }))
-    return responderHtml(
+    return responderTexto(
       resposta.status === 400 ? 400 : 502,
       "O Mercado Livre recusou a troca",
       "O codigo de autorizacao nao virou token.",
@@ -255,7 +256,7 @@ Deno.serve(async (requisicao: Request) => {
   const expiresIn = Number(dados.expires_in)
 
   if (!accessToken) {
-    return responderHtml(502, "Resposta sem access_token", "O Mercado Livre nao devolveu o token.")
+    return responderTexto(502, "Resposta sem access_token", "O Mercado Livre nao devolveu o token.")
   }
 
   // Sem offline_access nao vem refresh, e a automacao morreria em 6 horas.
@@ -265,7 +266,7 @@ Deno.serve(async (requisicao: Request) => {
       escopos: typeof dados.scope === "string" ? dados.scope : null,
       chavesRecebidas: Object.keys(dados).sort(),
     }))
-    return responderHtml(
+    return responderTexto(
       409,
       "Veio sem offline_access",
       "O Mercado Livre autorizou mas nao devolveu refresh_token. Isso costuma acontecer quando ele reaproveita uma autorizacao antiga: revogue o Baixou em Minha conta > Aplicacoes autorizadas e abra este endereco de novo.",
@@ -284,10 +285,10 @@ Deno.serve(async (requisicao: Request) => {
 
   if (erroGravar) {
     console.error("falha ao gravar tokens:", erroGravar.message)
-    return responderHtml(500, "Conectou, mas nao guardou", "Os tokens nao foram para o cofre.", erroGravar.message)
+    return responderTexto(500, "Conectou, mas nao guardou", "Os tokens nao foram para o cofre.", erroGravar.message)
   }
 
-  return responderHtml(
+  return responderTexto(
     200,
     "Mercado Livre conectado",
     "Os tokens estao no cofre do banco e a renovacao passa a ser automatica. Pode fechar esta aba.",
