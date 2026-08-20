@@ -86,6 +86,7 @@ async function processarItem(
   item: ItemMl,
   accessToken: string,
   pontuacaoMinima: number,
+  ensaio: boolean,
   resumo: Resumo,
 ): Promise<void> {
   const agora = new Date()
@@ -156,6 +157,20 @@ async function processarItem(
     // Barrar aqui evita ocupar a fila com algo que o publicador recusaria.
     resumo.recusados += 1
     resumo.detalhes.push({ item: item.id, situacao: "payload_invalido", erros: validacao.erros })
+    return
+  }
+
+  if (ensaio) {
+    resumo.detalhes.push({
+      item: item.id,
+      situacao: "ensaio_aprovaria",
+      pontuacao: pontuacao.total,
+      cobertura: Number(pontuacao.cobertura.toFixed(2)),
+      componentes: pontuacao.componentes,
+      ausentes: pontuacao.ausentes,
+      desconto: descontoVerificado,
+      previa: validacao.payload.text,
+    })
     return
   }
 
@@ -249,7 +264,21 @@ Deno.serve(async (requisicao: Request) => {
     return responder(500, { erro: "Nao foi possivel ler as configuracoes" })
   }
 
-  if (configuracao.trava_emergencia) {
+  // Ensaio observa, pontua e relata, mas nunca enfileira. Por isso pode rodar
+  // com a trava de emergencia ligada: nao existe caminho daqui ate uma
+  // publicacao. E o unico jeito de provar a coleta ponta a ponta sem soltar o
+  // freio de mao.
+  let ensaio = false
+  if (bruto !== "") {
+    try {
+      const corpo = JSON.parse(bruto) as Record<string, unknown>
+      ensaio = corpo.modo === "ensaio"
+    } catch {
+      return responder(400, { erro: "Corpo nao e JSON valido" })
+    }
+  }
+
+  if (configuracao.trava_emergencia && !ensaio) {
     return responder(200, { situacao: "trava_de_emergencia" })
   }
 
@@ -343,7 +372,7 @@ Deno.serve(async (requisicao: Request) => {
     }
 
     try {
-      await processarItem(supabase, observado, lido, accessToken, minima, resumo)
+      await processarItem(supabase, observado, lido, accessToken, minima, ensaio, resumo)
     } catch (erro) {
       const mensagem = erro instanceof Error ? erro.message : String(erro)
       await supabase.rpc("ml_item_falhou", { p_id: observado.id, p_motivo: mensagem })
