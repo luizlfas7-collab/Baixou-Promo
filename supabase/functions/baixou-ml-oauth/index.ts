@@ -4,6 +4,13 @@ const ENDERECO_AUTORIZACAO = "https://auth.mercadolivre.com.br/authorization"
 const ENDERECO_TOKEN = "https://api.mercadolibre.com/oauth/token"
 const TEMPO_LIMITE_MS = 15_000
 
+/**
+ * `offline_access` e o que faz o Mercado Livre emitir refresh_token. `read`
+ * cobre a leitura de itens e produtos. `write` fica de fora de proposito: o
+ * Baixou nao altera nada na conta.
+ */
+const ESCOPOS_PEDIDOS = "offline_access read"
+
 function exigirVariavel(nome: string): string {
   const valor = Deno.env.get(nome)
   if (!valor) throw new Error(`Variavel de ambiente ausente: ${nome}`)
@@ -116,17 +123,32 @@ Deno.serve(async (requisicao: Request) => {
       return responderHtml(500, "Falha ao iniciar", "O banco nao devolveu o par de autorizacao.")
     }
 
-    const destino = new URL(ENDERECO_AUTORIZACAO)
-    destino.searchParams.set("response_type", "code")
-    destino.searchParams.set("client_id", inicio.client_id)
-    destino.searchParams.set("redirect_uri", inicio.redirect_uri)
-    destino.searchParams.set("state", inicio.estado)
-    destino.searchParams.set("code_challenge", inicio.desafio)
-    destino.searchParams.set("code_challenge_method", "S256")
+    // O escopo vai na requisicao, e nao so na configuracao da aplicacao: o
+    // painel do Mercado Livre nem sempre expoe offline_access para marcar, e
+    // sem ele nao vem refresh_token. Pedir aqui e o caminho documentado.
+    //
+    // Montado a mao porque URLSearchParams escreve espaco como "+", e o
+    // separador de escopo em OAuth precisa ser %20.
+    const parametros: Array<[string, string]> = [
+      ["response_type", "code"],
+      ["client_id", inicio.client_id],
+      ["redirect_uri", inicio.redirect_uri],
+      ["state", inicio.estado],
+      ["code_challenge", inicio.desafio],
+      ["code_challenge_method", "S256"],
+      ["scope", ESCOPOS_PEDIDOS],
+    ]
+
+    const consulta = parametros
+      .map(([chave, valor]) => `${chave}=${encodeURIComponent(valor)}`)
+      .join("&")
 
     return new Response(null, {
       status: 302,
-      headers: { location: destino.toString(), "cache-control": "no-store" },
+      headers: {
+        location: `${ENDERECO_AUTORIZACAO}?${consulta}`,
+        "cache-control": "no-store",
+      },
     })
   }
 
@@ -245,8 +267,8 @@ Deno.serve(async (requisicao: Request) => {
     }))
     return responderHtml(
       409,
-      "Falta o escopo offline_access",
-      "O Mercado Livre autorizou mas nao devolveu refresh_token. Habilite o escopo offline_access na aplicacao e conecte de novo.",
+      "Veio sem offline_access",
+      "O Mercado Livre autorizou mas nao devolveu refresh_token. Isso costuma acontecer quando ele reaproveita uma autorizacao antiga: revogue o Baixou em Minha conta > Aplicacoes autorizadas e abra este endereco de novo.",
       typeof dados.scope === "string" ? `escopos concedidos: ${dados.scope}` : "nenhum escopo informado",
     )
   }
