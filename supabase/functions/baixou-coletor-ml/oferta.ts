@@ -83,9 +83,11 @@ export function pontuar({ item, avaliacao, reputacao, descontoVerificado }: Sina
     },
     {
       nome: "reputacao",
+      // Loja oficial vale tanto quanto vendedor verde: sao duas formas de a
+      // propria plataforma dizer que a contraparte e confiavel.
       peso: 18,
-      fracao: reputacao.verde ? 1 : 0,
-      disponivel: reputacao.nivel !== null,
+      fracao: reputacao.verde || item.lojaOficial ? 1 : 0,
+      disponivel: reputacao.nivel !== null || item.lojaOficial,
     },
     {
       nome: "avaliacao",
@@ -106,8 +108,10 @@ export function pontuar({ item, avaliacao, reputacao, descontoVerificado }: Sina
     {
       nome: "tracao",
       peso: 10,
-      fracao: entre(item.vendidos / 100, 0, 1),
-      disponivel: true,
+      // A leitura pelo catalogo nao informa quantidade vendida. Sai da conta
+      // em vez de valer zero: zero afirmaria que ninguem comprou.
+      fracao: item.vendidos === null ? 0 : entre(item.vendidos / 100, 0, 1),
+      disponivel: item.vendidos !== null,
     },
     {
       nome: "frete",

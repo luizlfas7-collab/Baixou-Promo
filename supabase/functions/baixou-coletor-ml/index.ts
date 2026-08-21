@@ -4,7 +4,7 @@ import { validarPayloadTelegram } from "../_compartilhado/payload.ts"
 import {
   ErroMercadoLivre,
   lerAvaliacao,
-  lerItens,
+  lerAnuncioDoCatalogo,
   lerReputacao,
   renovarTokens,
   type Credenciais,
@@ -34,6 +34,7 @@ type ItemObservado = {
   item_id: string
   url_afiliado: string
   categoria: string
+  produto_catalogo: string
 }
 
 type Resumo = {
@@ -341,31 +342,33 @@ Deno.serve(async (requisicao: Request) => {
     detalhes: [],
   }
 
-  let lidos: Map<string, ItemMl | ErroMercadoLivre>
-  try {
-    lidos = await lerItens(observados.map((o) => o.item_id), accessToken)
-  } catch (erro) {
-    const codigo = erro instanceof ErroMercadoLivre ? erro.codigo : "leitura_falhou"
-    const mensagem = erro instanceof Error ? erro.message : String(erro)
-    console.error("[coletor-ml] leitura em lote:", mensagem)
-    return responder(502, { erro: "Falha ao ler itens", codigo, detalhe: mensagem })
-  }
-
   const minima = Number(configuracao.aprovacao_pontuacao_minima) || 88
 
+  // Sem leitura em lote: o /items?ids= esta fechado. Cada item exige duas
+  // chamadas ao catalogo, entao o lote pequeno da watchlist ja e o teto.
   for (const observado of observados) {
-    const lido = lidos.get(observado.item_id)
+    let lido: ItemMl
 
-    if (!lido || lido instanceof ErroMercadoLivre) {
-      const motivo = lido?.message ?? "Item nao retornado"
-      await supabase.rpc("ml_item_falhou", { p_id: observado.id, p_motivo: motivo })
+    try {
+      lido = await lerAnuncioDoCatalogo(
+        observado.produto_catalogo,
+        observado.item_id,
+        accessToken,
+      )
+    } catch (erro) {
+      const mensagem = erro instanceof Error ? erro.message : String(erro)
+      const retentavel = erro instanceof ErroMercadoLivre && erro.retentavel
+      // Falha de rede nao e culpa do item: nao conta contra ele.
+      if (!retentavel) {
+        await supabase.rpc("ml_item_falhou", { p_id: observado.id, p_motivo: mensagem })
+      }
       resumo.falhas += 1
-      resumo.detalhes.push({ item: observado.item_id, etapa: "ler", erro: motivo })
+      resumo.detalhes.push({ item: observado.item_id, etapa: "ler", erro: mensagem })
       continue
     }
 
     if (!lido.disponivel) {
-      await supabase.rpc("ml_item_falhou", { p_id: observado.id, p_motivo: "Item indisponivel" })
+      await supabase.rpc("ml_item_falhou", { p_id: observado.id, p_motivo: "Produto inativo" })
       resumo.recusados += 1
       resumo.detalhes.push({ item: observado.item_id, situacao: "indisponivel" })
       continue

@@ -2,9 +2,6 @@ const ENDERECO_TOKEN = "https://api.mercadolibre.com/oauth/token"
 const ENDERECO_API = "https://api.mercadolibre.com"
 const TEMPO_LIMITE_MS = 12_000
 
-/** O ML aceita ate 20 ids por chamada de /items. */
-export const MAXIMO_POR_LOTE = 20
-
 export type Credenciais = {
   client_id: string
   client_secret: string
@@ -29,8 +26,10 @@ export type ItemMl = {
   urlImagem: string | null
   disponivel: boolean
   novo: boolean
-  vendidos: number
+  /** null quando a fonte nao informa. Nao confundir com zero vendas. */
+  vendidos: number | null
   freteGratis: boolean
+  lojaOficial: boolean
   vendedorId: number | null
 }
 
@@ -56,10 +55,7 @@ export class ErroMercadoLivre extends Error {
   }
 }
 
-async function comTempoLimite(
-  entrada: string,
-  init: RequestInit,
-): Promise<Response> {
+async function comTempoLimite(entrada: string, init: RequestInit): Promise<Response> {
   const cancelamento = new AbortController()
   const alarme = setTimeout(() => cancelamento.abort(), TEMPO_LIMITE_MS)
   try {
@@ -131,10 +127,7 @@ export async function renovarTokens(credenciais: Credenciais): Promise<TokensRen
   }
 }
 
-async function buscar(
-  caminho: string,
-  accessToken: string,
-): Promise<unknown> {
+async function buscar(caminho: string, accessToken: string): Promise<unknown> {
   const resposta = await comTempoLimite(`${ENDERECO_API}${caminho}`, {
     method: "GET",
     headers: {
@@ -148,6 +141,10 @@ async function buscar(
       `Acesso negado em ${caminho} (HTTP ${resposta.status})`,
       "acesso_negado",
     )
+  }
+
+  if (resposta.status === 404) {
+    throw new ErroMercadoLivre(`Nao encontrado: ${caminho}`, "nao_encontrado")
   }
 
   if (resposta.status === 429) {
@@ -178,91 +175,90 @@ function numeroOuNulo(valor: unknown): number | null {
  * Imagem em resolucao boa para o Telegram. O ML entrega miniatura por padrao;
  * o sufixo -O e a versao grande, e e a unica que rende no post.
  */
-function imagemGrande(item: Record<string, unknown>): string | null {
-  const pictures = Array.isArray(item.pictures) ? item.pictures : []
-  const primeira = pictures[0] as Record<string, unknown> | undefined
-  const bruta = typeof primeira?.secure_url === "string"
-    ? primeira.secure_url
-    : typeof item.secure_thumbnail === "string"
-      ? item.secure_thumbnail
-      : null
-
+function imagemGrande(bruta: string | null): string | null {
   if (!bruta || !bruta.startsWith("https://http2.mlstatic.com/")) return null
-
   return bruta.replace(/-[A-Z]\.(webp|jpg|jpeg|png)$/i, "-O.$1")
 }
 
-/** Le ate 20 itens numa chamada so. Item ausente vira erro daquele item. */
-export async function lerItens(
-  ids: readonly string[],
+/**
+ * Le um anuncio pela porta do catalogo.
+ *
+ * O /items/{id} de anuncio de terceiro responde 403 nesta aplicacao, com ou
+ * sem escopo — testado a exaustao. Ja /products/{catalogo}/items devolve
+ * todos os anuncios que disputam aquele produto, com preco e preco original.
+ * O titulo e a foto vem de /products/{catalogo}, que a lista nao traz.
+ *
+ * Duas chamadas por item, portanto. E o preco que o conjunto paga por ter
+ * fechado o endpoint direto.
+ */
+export async function lerAnuncioDoCatalogo(
+  produtoCatalogo: string,
+  itemId: string,
   accessToken: string,
-): Promise<Map<string, ItemMl | ErroMercadoLivre>> {
-  const resultado = new Map<string, ItemMl | ErroMercadoLivre>()
-  if (ids.length === 0) return resultado
+): Promise<ItemMl> {
+  const [catalogo, lista] = await Promise.all([
+    buscar(`/products/${produtoCatalogo}`, accessToken) as Promise<Record<string, unknown>>,
+    buscar(`/products/${produtoCatalogo}/items`, accessToken) as Promise<Record<string, unknown>>,
+  ])
 
-  const bruto = await buscar(
-    `/items?ids=${ids.join(",")}&attributes=id,title,price,original_price,permalink,pictures,secure_thumbnail,status,available_quantity,condition,sold_quantity,shipping,seller_id`,
-    accessToken,
-  )
+  const anuncios = Array.isArray(lista.results) ? lista.results : []
 
-  const linhas = Array.isArray(bruto) ? bruto : []
+  const nosso = anuncios.find(
+    (a) => (a as Record<string, unknown>).item_id === itemId,
+  ) as Record<string, unknown> | undefined
 
-  for (const linha of linhas) {
-    const envelope = linha as Record<string, unknown>
-    const corpo = envelope.body as Record<string, unknown> | undefined
-    const codigo = Number(envelope.code)
-    const id = typeof corpo?.id === "string" ? corpo.id : String(envelope.id ?? "")
-
-    if (!id) continue
-
-    if (codigo !== 200 || !corpo) {
-      resultado.set(id, new ErroMercadoLivre(`Item devolveu codigo ${codigo}`, `item_${codigo}`))
-      continue
-    }
-
-    const preco = numeroOuNulo(corpo.price)
-    const permalink = typeof corpo.permalink === "string" ? corpo.permalink : ""
-
-    if (preco === null || !permalink.startsWith("https://")) {
-      resultado.set(id, new ErroMercadoLivre("Item sem preco ou sem link canonico", "item_incompleto"))
-      continue
-    }
-
-    const frete = corpo.shipping as Record<string, unknown> | undefined
-
-    resultado.set(id, {
-      id,
-      titulo: typeof corpo.title === "string" ? corpo.title : "",
-      precoAtual: preco,
-      precoOriginal: numeroOuNulo(corpo.original_price),
-      urlCanonica: permalink,
-      urlImagem: imagemGrande(corpo),
-      disponivel: corpo.status === "active" && Number(corpo.available_quantity ?? 0) > 0,
-      novo: corpo.condition === "new",
-      vendidos: Number(corpo.sold_quantity ?? 0) || 0,
-      freteGratis: frete?.free_shipping === true,
-      vendedorId: Number(corpo.seller_id) || null,
-    })
+  if (!nosso) {
+    // O vendedor encerrou o anuncio, ou ele saiu do catalogo. Publicar a
+    // oferta de outro vendedor mudaria o que o link de afiliado entrega.
+    throw new ErroMercadoLivre(
+      `Anuncio ${itemId} nao esta mais no catalogo ${produtoCatalogo}`,
+      "anuncio_fora_do_catalogo",
+    )
   }
 
-  for (const id of ids) {
-    if (!resultado.has(id)) {
-      resultado.set(id, new ErroMercadoLivre("Item nao veio na resposta", "item_ausente"))
-    }
+  const preco = numeroOuNulo(nosso.price)
+  if (preco === null) {
+    throw new ErroMercadoLivre("Anuncio sem preco", "sem_preco")
   }
 
-  return resultado
+  const titulo = typeof catalogo.name === "string" ? catalogo.name : ""
+  const fotos = Array.isArray(catalogo.pictures) ? catalogo.pictures : []
+  const primeira = fotos[0] as Record<string, unknown> | undefined
+  const urlFoto = typeof primeira?.url === "string"
+    ? primeira.url
+    : typeof primeira?.secure_url === "string"
+      ? primeira.secure_url
+      : null
+
+  const frete = nosso.shipping as Record<string, unknown> | undefined
+
+  return {
+    id: itemId,
+    titulo,
+    precoAtual: preco,
+    precoOriginal: numeroOuNulo(nosso.original_price),
+    // O catalogo devolve permalink vazio; a URL canonica do produto e estavel.
+    urlCanonica: `https://www.mercadolivre.com.br/p/${produtoCatalogo}`,
+    urlImagem: imagemGrande(urlFoto),
+    disponivel: catalogo.status === "active",
+    novo: nosso.condition === "new",
+    // Esta resposta nao informa quantidade vendida. null, e nao zero: zerar
+    // seria afirmar que ninguem comprou, o que nao sabemos.
+    vendidos: null,
+    freteGratis: frete?.free_shipping === true,
+    lojaOficial: nosso.official_store_id != null,
+    vendedorId: Number(nosso.seller_id) || null,
+  }
 }
 
 /** Avaliacao do produto. Ausencia nao e erro: muitos itens nao tem review. */
-export async function lerAvaliacao(
-  itemId: string,
-  accessToken: string,
-): Promise<AvaliacaoMl> {
+export async function lerAvaliacao(itemId: string, accessToken: string): Promise<AvaliacaoMl> {
   try {
     const bruto = await buscar(`/reviews/item/${itemId}`, accessToken) as Record<string, unknown>
-    const nota = Number(bruto.rating_average)
-    const total = Number(bruto.total_reviews)
+    const avaliacao = bruto.rating_average ?? (bruto.paging as Record<string, unknown> | undefined)?.rating_average
+    const nota = Number(avaliacao)
+    const paginacao = bruto.paging as Record<string, unknown> | undefined
+    const total = Number(bruto.total_reviews ?? paginacao?.total)
     return {
       nota: Number.isFinite(nota) && nota > 0 ? nota : null,
       total: Number.isFinite(total) ? total : 0,
