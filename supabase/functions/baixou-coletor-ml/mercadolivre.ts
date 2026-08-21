@@ -193,7 +193,7 @@ function imagemGrande(bruta: string | null): string | null {
  */
 export async function lerAnuncioDoCatalogo(
   produtoCatalogo: string,
-  itemId: string,
+  itemId: string | null,
   accessToken: string,
 ): Promise<ItemMl> {
   const [catalogo, lista] = await Promise.all([
@@ -201,19 +201,35 @@ export async function lerAnuncioDoCatalogo(
     buscar(`/products/${produtoCatalogo}/items`, accessToken) as Promise<Record<string, unknown>>,
   ])
 
-  const anuncios = Array.isArray(lista.results) ? lista.results : []
+  const anuncios = (Array.isArray(lista.results) ? lista.results : []) as Record<string, unknown>[]
 
-  const nosso = anuncios.find(
-    (a) => (a as Record<string, unknown>).item_id === itemId,
-  ) as Record<string, unknown> | undefined
+  let nosso: Record<string, unknown> | undefined
 
-  if (!nosso) {
-    // O vendedor encerrou o anuncio, ou ele saiu do catalogo. Publicar a
-    // oferta de outro vendedor mudaria o que o link de afiliado entrega.
-    throw new ErroMercadoLivre(
-      `Anuncio ${itemId} nao esta mais no catalogo ${produtoCatalogo}`,
-      "anuncio_fora_do_catalogo",
-    )
+  if (itemId) {
+    // Link preso a um anuncio: seguir outro vendedor mudaria o que o leitor
+    // encontra ao clicar.
+    nosso = anuncios.find((a) => a.item_id === itemId)
+
+    if (!nosso) {
+      throw new ErroMercadoLivre(
+        `Anuncio ${itemId} nao esta mais no catalogo ${produtoCatalogo}`,
+        "anuncio_fora_do_catalogo",
+      )
+    }
+  } else {
+    // Link para a pagina do catalogo: quem clica compra de quem estiver
+    // ganhando a vitrine. O menor preco e a melhor aproximacao disso, e e o
+    // numero que o leitor vai ver.
+    nosso = anuncios
+      .filter((a) => numeroOuNulo(a.price) !== null)
+      .sort((a, b) => Number(a.price) - Number(b.price))[0]
+
+    if (!nosso) {
+      throw new ErroMercadoLivre(
+        `Catalogo ${produtoCatalogo} sem anuncio com preco`,
+        "catalogo_sem_anuncio",
+      )
+    }
   }
 
   const preco = numeroOuNulo(nosso.price)
@@ -233,7 +249,7 @@ export async function lerAnuncioDoCatalogo(
   const frete = nosso.shipping as Record<string, unknown> | undefined
 
   return {
-    id: itemId,
+    id: String(nosso.item_id ?? itemId ?? produtoCatalogo),
     titulo,
     precoAtual: preco,
     precoOriginal: numeroOuNulo(nosso.original_price),

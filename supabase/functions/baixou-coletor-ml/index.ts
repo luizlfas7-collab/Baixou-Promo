@@ -31,7 +31,7 @@ function responder(status: number, corpo: Record<string, unknown>): Response {
 
 type ItemObservado = {
   id: number
-  item_id: string
+  item_id: string | null
   url_afiliado: string
   categoria: string
   produto_catalogo: string
@@ -91,14 +91,18 @@ async function processarItem(
   resumo: Resumo,
 ): Promise<void> {
   const agora = new Date()
-  const chave = chaveObservacao(item.id, agora)
+  // Identidade estavel: quando a linha segue o vencedor do catalogo, o
+  // vendedor muda de uma rodada para outra. Amarrar o historico ao item da vez
+  // fragmentaria a serie de precos justamente no caso em que ela mais importa.
+  const identidade = observado.item_id ?? observado.produto_catalogo
+  const chave = chaveObservacao(identidade, agora)
 
   // Primeira passada sem payload: o banco grava a observacao de preco e
   // devolve o desconto que ELE apurou contra o proprio historico. Sem isso a
   // pontuacao acreditaria no preco "de" que a loja informa.
   const { data: observacao, error: erroObservar } = await supabase.rpc("registrar_oferta", {
     p_fonte_slug: FONTE,
-    p_id_externo: item.id,
+    p_id_externo: identidade,
     p_titulo: item.titulo,
     p_url_canonica: item.urlCanonica,
     p_preco_atual: item.precoAtual,
@@ -106,7 +110,7 @@ async function processarItem(
     p_url_afiliado: observado.url_afiliado,
     p_url_imagem: item.urlImagem,
     p_preco_original: item.precoOriginal,
-    p_metadados: { categoria: observado.categoria, vendidos: item.vendidos },
+    p_metadados: { categoria: observado.categoria, catalogo: observado.produto_catalogo },
   })
 
   if (erroObservar) {
@@ -177,7 +181,7 @@ async function processarItem(
 
   const { data: enfileiramento, error: erroEnfileirar } = await supabase.rpc("registrar_oferta", {
     p_fonte_slug: FONTE,
-    p_id_externo: item.id,
+    p_id_externo: identidade,
     p_titulo: item.titulo,
     p_url_canonica: item.urlCanonica,
     p_preco_atual: item.precoAtual,
@@ -363,14 +367,14 @@ Deno.serve(async (requisicao: Request) => {
         await supabase.rpc("ml_item_falhou", { p_id: observado.id, p_motivo: mensagem })
       }
       resumo.falhas += 1
-      resumo.detalhes.push({ item: observado.item_id, etapa: "ler", erro: mensagem })
+      resumo.detalhes.push({ item: observado.item_id ?? observado.produto_catalogo, etapa: "ler", erro: mensagem })
       continue
     }
 
     if (!lido.disponivel) {
       await supabase.rpc("ml_item_falhou", { p_id: observado.id, p_motivo: "Produto inativo" })
       resumo.recusados += 1
-      resumo.detalhes.push({ item: observado.item_id, situacao: "indisponivel" })
+      resumo.detalhes.push({ item: observado.item_id ?? observado.produto_catalogo, situacao: "indisponivel" })
       continue
     }
 
@@ -380,7 +384,7 @@ Deno.serve(async (requisicao: Request) => {
       const mensagem = erro instanceof Error ? erro.message : String(erro)
       await supabase.rpc("ml_item_falhou", { p_id: observado.id, p_motivo: mensagem })
       resumo.falhas += 1
-      resumo.detalhes.push({ item: observado.item_id, etapa: "processar", erro: mensagem })
+      resumo.detalhes.push({ item: observado.item_id ?? observado.produto_catalogo, etapa: "processar", erro: mensagem })
     }
   }
 
