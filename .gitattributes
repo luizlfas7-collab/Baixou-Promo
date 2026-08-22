@@ -1,0 +1,6 @@
+# Fim de linha normalizado no repositório, para o histórico não encher de ruído
+# quando o mesmo arquivo é editado no Windows e lido no Linux (Edge Functions).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.webp binary
