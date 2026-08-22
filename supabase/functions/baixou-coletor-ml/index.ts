@@ -7,7 +7,6 @@ import {
   lerAnuncioDoCatalogo,
   lerReputacao,
   renovarTokens,
-  type Credenciais,
   type ItemMl,
 } from "./mercadolivre.ts"
 import { montarPayload, pontuar } from "./oferta.ts"
@@ -52,33 +51,119 @@ function chaveObservacao(itemId: string, agora: Date): string {
   return `ml:${itemId}:${janela}`
 }
 
-async function garantirToken(
-  supabase: SupabaseClient,
-  credenciais: Credenciais,
-): Promise<string> {
-  if (!credenciais.precisa_renovar && credenciais.access_token) {
-    return credenciais.access_token
+type Aquisicao = {
+  situacao: string
+  motivo: string | null
+  client_id: string | null
+  client_secret: string | null
+  access_token: string | null
+  refresh_token: string | null
+  precisa_renovar: boolean
+  lock_token: string | null
+  geracao: number | null
+}
+
+/**
+ * Rodada que nao pode seguir, mas tambem nao e falha: outra ja esta renovando,
+ * ou a conexao esta em recuo, ou precisa de reautorizacao humana. Encerrar
+ * quieto e o comportamento certo — insistir so queima cota.
+ */
+class RodadaSemToken extends Error {
+  constructor(readonly situacao: string, readonly motivo: string) {
+    super(motivo)
+    this.name = "RodadaSemToken"
   }
+}
 
-  const renovados = await renovarTokens(credenciais)
-
-  const { error } = await supabase.rpc("oauth_ml_gravar_tokens", {
-    p_access_token: renovados.accessToken,
-    p_refresh_token: renovados.refreshToken,
-    p_expires_in: renovados.expiresIn,
-    p_escopos: renovados.escopos,
-    p_primeira_conexao: false,
+/**
+ * Unica porta para o token.
+ *
+ * O refresh do Mercado Livre e rotativo: cada renovacao invalida a anterior.
+ * Duas rodadas renovando ao mesmo tempo rotacionam duas vezes, e a ultima a
+ * gravar guarda um refresh ja morto — a conexao cai em silencio. Por isso a
+ * renovacao acontece sob lease: quem pega renova, quem nao pega volta depois.
+ */
+async function obterToken(
+  supabase: SupabaseClient,
+  worker: string,
+): Promise<string> {
+  const { data, error } = await supabase.rpc("ml_token_adquirir", {
+    p_worker: worker,
+    p_ttl_segundos: 120,
   })
 
   if (error) {
-    // Renovou no ML mas nao guardou: o refresh antigo ja nao vale mais.
-    throw new ErroMercadoLivre(
-      `Tokens renovados mas nao gravados: ${error.message}`,
-      "renovacao_nao_gravada",
-    )
+    throw new ErroMercadoLivre(`ml_token_adquirir: ${error.message}`, "aquisicao_falhou", true)
   }
 
-  return renovados.accessToken
+  const aq = (Array.isArray(data) ? data[0] : data) as Aquisicao | undefined
+
+  if (!aq) {
+    throw new ErroMercadoLivre("Banco nao devolveu credenciais", "aquisicao_vazia")
+  }
+
+  if (!aq.precisa_renovar) {
+    if (!aq.access_token) {
+      throw new RodadaSemToken(aq.situacao, aq.motivo ?? "sem_token")
+    }
+    return aq.access_token
+  }
+
+  // Precisa renovar mas nao ganhou o lease: outra rodada esta cuidando disso,
+  // ou a conexao esta em espera de retentativa.
+  if (!aq.lock_token) {
+    throw new RodadaSemToken(aq.situacao, aq.motivo ?? "sem_lease")
+  }
+
+  try {
+    const renovados = await renovarTokens({
+      client_id: aq.client_id ?? "",
+      client_secret: aq.client_secret ?? "",
+      access_token: aq.access_token,
+      refresh_token: aq.refresh_token,
+      precisa_renovar: true,
+    })
+
+    const { error: erroGravar } = await supabase.rpc("ml_token_renovado", {
+      p_lock_token: aq.lock_token,
+      p_access_token: renovados.accessToken,
+      p_refresh_token: renovados.refreshToken,
+      p_expires_in: renovados.expiresIn,
+      p_escopos: renovados.escopos,
+    })
+
+    if (erroGravar) {
+      // Renovou no ML mas nao guardou: o refresh antigo ja nao vale mais, e o
+      // novo se perdeu. So reautorizacao resolve.
+      await supabase.rpc("ml_token_falhou", {
+        p_lock_token: aq.lock_token,
+        p_codigo: "renovacao_nao_gravada",
+        p_permanente: true,
+      })
+      throw new ErroMercadoLivre(
+        `Tokens renovados mas nao gravados: ${erroGravar.message}`,
+        "renovacao_nao_gravada",
+      )
+    }
+
+    console.log("[coletor-ml] token renovado", JSON.stringify({ geracao: (aq.geracao ?? 0) + 1 }))
+    return renovados.accessToken
+  } catch (erro) {
+    if (erro instanceof ErroMercadoLivre && erro.codigo === "renovacao_nao_gravada") throw erro
+
+    const codigo = erro instanceof ErroMercadoLivre ? erro.codigo : "renovacao_falhou"
+    // Refresh revogado nao melhora com insistencia: marca para reautorizacao
+    // em vez de bater no ML a cada cinco minutos para sempre.
+    const permanente = erro instanceof ErroMercadoLivre ? !erro.retentavel : false
+
+    await supabase.rpc("ml_token_falhou", {
+      p_lock_token: aq.lock_token,
+      p_codigo: codigo,
+      p_permanente: permanente,
+    })
+
+    throw erro
+  }
 }
 
 async function processarItem(
@@ -291,28 +376,27 @@ Deno.serve(async (requisicao: Request) => {
     return responder(200, { situacao: "coleta_desligada" })
   }
 
-  // Credenciais e token valido.
-  const { data: linhasCredenciais, error: erroCredenciais } = await supabase
-    .rpc("ml_credenciais_para_uso")
-
-  const credenciais = (Array.isArray(linhasCredenciais)
-    ? linhasCredenciais[0]
-    : linhasCredenciais) as Credenciais | undefined
-
-  if (erroCredenciais || !credenciais?.client_id) {
-    return responder(409, {
-      erro: "Mercado Livre nao conectado",
-      detalhe: erroCredenciais?.message ?? null,
-    })
-  }
+  const identificadorWorker = `coletor:${crypto.randomUUID().slice(0, 8)}`
 
   let accessToken: string
   try {
-    accessToken = await garantirToken(supabase, credenciais)
+    accessToken = await obterToken(supabase, identificadorWorker)
   } catch (erro) {
+    if (erro instanceof RodadaSemToken) {
+      // Nao e falha: e a conexao pedindo espaco — outra rodada renovando, ou
+      // recuo apos erro, ou reautorizacao pendente. Responder 200 evita
+      // encher o log de alarme por algo que se resolve sozinho, ou que so
+      // uma pessoa resolve.
+      console.log("[coletor-ml] rodada encerrada", JSON.stringify({
+        situacao: erro.situacao,
+        motivo: erro.motivo,
+      }))
+      return responder(200, { situacao: erro.situacao, motivo: erro.motivo })
+    }
+
     const codigo = erro instanceof ErroMercadoLivre ? erro.codigo : "renovacao_falhou"
     const mensagem = erro instanceof Error ? erro.message : String(erro)
-    console.error("[coletor-ml] renovacao:", mensagem)
+    console.error("[coletor-ml] token:", mensagem)
     await supabase.from("erros").insert({
       chave_idempotencia: `coletor:${codigo}:${Date.now()}`,
       gravidade: "critico",
