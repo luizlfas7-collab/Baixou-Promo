@@ -53,7 +53,7 @@ export type Resultado =
 function normalizar(linha: string): string {
   return linha
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .trim()
     .toUpperCase()
 }

@@ -301,6 +301,7 @@ async function processarItem(
   })
 }
 
+
 Deno.serve(async (requisicao: Request) => {
   if (requisicao.method !== "POST") {
     return responder(405, { erro: "Somente POST" })
@@ -344,94 +345,20 @@ Deno.serve(async (requisicao: Request) => {
     return responder(401, { erro: "Nao autorizado" })
   }
 
-  const { data: configuracao, error: erroConfiguracao } = await supabase
-    .from("configuracoes")
-    .select("coleta_ativa, trava_emergencia, aprovacao_pontuacao_minima")
-    .eq("id", 1)
-    .single()
-
-  if (erroConfiguracao || !configuracao) {
-    return responder(500, { erro: "Nao foi possivel ler as configuracoes" })
-  }
-
-  // Ensaio observa, pontua e relata, mas nunca enfileira. Por isso pode rodar
-  // com a trava de emergencia ligada: nao existe caminho daqui ate uma
-  // publicacao. E o unico jeito de provar a coleta ponta a ponta sem soltar o
-  // freio de mao.
-  let ensaio = false
-  if (bruto !== "") {
-    try {
-      const corpo = JSON.parse(bruto) as Record<string, unknown>
-      ensaio = corpo.modo === "ensaio"
-    } catch {
-      return responder(400, { erro: "Corpo nao e JSON valido" })
-    }
-  }
-
-  // A trava de emergencia e freio de PUBLICACAO, nao de observacao.
-  //
-  // Sair aqui era o mesmo defeito que deixou o Radar Rota 34 dias mudo: o cron
-  // reportava sucesso e nada acontecia. Pior ainda, impedia justamente o que
-  // precisa acontecer sob trava — formar o historico de preco, sem o qual
-  // nenhuma oferta e aprovada quando o freio for solto.
-  //
-  // Com a trava ligada o coletor observa, pontua e relata; nao enfileira. Nao
-  // enfileirar e deliberado: fila crescendo com o freio puxado viraria
-  // enxurrada no canal no instante em que ele fosse solto.
-  const travada = configuracao.trava_emergencia === true
-  if (travada) ensaio = true
-
-  if (!configuracao.coleta_ativa) {
-    return responder(200, { situacao: "coleta_desligada" })
-  }
-
   const identificadorWorker = `coletor:${crypto.randomUUID().slice(0, 8)}`
 
-  let accessToken: string
-  try {
-    accessToken = await obterToken(supabase, identificadorWorker)
-  } catch (erro) {
-    if (erro instanceof RodadaSemToken) {
-      // Nao e falha: e a conexao pedindo espaco — outra rodada renovando, ou
-      // recuo apos erro, ou reautorizacao pendente. Responder 200 evita
-      // encher o log de alarme por algo que se resolve sozinho, ou que so
-      // uma pessoa resolve.
-      console.log("[coletor-ml] rodada encerrada", JSON.stringify({
-        situacao: erro.situacao,
-        motivo: erro.motivo,
-      }))
-      return responder(200, { situacao: erro.situacao, motivo: erro.motivo })
-    }
-
-    const codigo = erro instanceof ErroMercadoLivre ? erro.codigo : "renovacao_falhou"
-    const mensagem = erro instanceof Error ? erro.message : String(erro)
-    console.error("[coletor-ml] token:", mensagem)
-    await supabase.from("erros").insert({
-      chave_idempotencia: `coletor:${codigo}:${Date.now()}`,
-      gravidade: "critico",
-      codigo,
-      mensagem: mensagem.slice(0, 2000),
-    })
-    return responder(502, { erro: "Nao foi possivel obter token do Mercado Livre", codigo })
-  }
-
-  // Lote de itens vencidos. A funcao ja reagenda cada um.
-  const { data: itens, error: erroItens } = await supabase.rpc("ml_itens_para_observar", {
-    p_limite: 5,
-  })
-
-  if (erroItens) {
-    return responder(500, { erro: "Nao foi possivel ler a watchlist", detalhe: erroItens.message })
-  }
-
-  const observados = (itens ?? []) as ItemObservado[]
-
-  if (observados.length === 0) {
-    return responder(200, { situacao: "nada_vencido" })
-  }
-
+  // Registro da rodada.
+  //
+  // A tabela execucoes existia desde o primeiro dia e nunca recebeu uma linha:
+  // o coletor trabalhava sem deixar rastro. Um dia em que ele parasse ficaria
+  // identico a um dia sem queda de preco — foi exatamente assim que o Radar
+  // Rota passou 34 dias mudo sem ninguem notar.
+  //
+  // Abre aqui e fecha no finally. Sao sete saidas diferentes daqui para baixo;
+  // fechar em cada uma seria questao de tempo ate esquecer uma, e rodada nao
+  // registrada equivale a rodada que nao aconteceu para quem esta olhando.
   const resumo: Resumo = {
-    vistos: observados.length,
+    vistos: 0,
     observados: 0,
     enfileirados: 0,
     recusados: 0,
@@ -439,56 +366,210 @@ Deno.serve(async (requisicao: Request) => {
     detalhes: [],
   }
 
-  const minima = Number(configuracao.aprovacao_pontuacao_minima) || 88
+  let execucaoId: number | null = null
+  let situacaoFinal = "falhou"
+  let resumoErro: string | null = null
+  const metadadosFinais: Record<string, unknown> = {}
 
-  // Sem leitura em lote: o /items?ids= esta fechado. Cada item exige duas
-  // chamadas ao catalogo, entao o lote pequeno da watchlist ja e o teto.
-  for (const observado of observados) {
-    let lido: ItemMl
+  const { data: idAberto, error: erroAbrir } = await supabase.rpc("execucao_abrir", {
+    p_chave: `coleta:${identificadorWorker}:${new Date().toISOString()}`,
+    p_tipo: "coleta",
+    p_worker: identificadorWorker,
+    p_fonte_slug: FONTE,
+  })
 
-    try {
-      lido = await lerAnuncioDoCatalogo(
-        observado.produto_catalogo,
-        observado.item_id,
-        accessToken,
-      )
-    } catch (erro) {
-      const mensagem = erro instanceof Error ? erro.message : String(erro)
-      const retentavel = erro instanceof ErroMercadoLivre && erro.retentavel
-      // Falha de rede nao e culpa do item: nao conta contra ele.
-      if (!retentavel) {
-        await supabase.rpc("ml_item_falhou", { p_id: observado.id, p_motivo: mensagem })
-      }
-      resumo.falhas += 1
-      resumo.detalhes.push({ item: observado.item_id ?? observado.produto_catalogo, etapa: "ler", erro: mensagem })
-      continue
-    }
-
-    if (!lido.disponivel) {
-      await supabase.rpc("ml_item_falhou", { p_id: observado.id, p_motivo: "Produto inativo" })
-      resumo.recusados += 1
-      resumo.detalhes.push({ item: observado.item_id ?? observado.produto_catalogo, situacao: "indisponivel" })
-      continue
-    }
-
-    try {
-      await processarItem(supabase, observado, lido, accessToken, minima, ensaio, resumo)
-    } catch (erro) {
-      const mensagem = erro instanceof Error ? erro.message : String(erro)
-      await supabase.rpc("ml_item_falhou", { p_id: observado.id, p_motivo: mensagem })
-      resumo.falhas += 1
-      resumo.detalhes.push({ item: observado.item_id ?? observado.produto_catalogo, etapa: "processar", erro: mensagem })
-    }
+  if (erroAbrir) {
+    // Registro e observabilidade, nao a missao: falhar aqui nao pode impedir a
+    // coleta de acontecer.
+    console.error("[coletor-ml] execucao_abrir:", erroAbrir.message)
+  } else {
+    execucaoId = typeof idAberto === "number" ? idAberto : null
   }
 
-  console.log("[coletor-ml] rodada", JSON.stringify({
-    ensaio,
-    travada,
-    vistos: resumo.vistos,
-    enfileirados: resumo.enfileirados,
-    recusados: resumo.recusados,
-    falhas: resumo.falhas,
-  }))
+  try {
+    const { data: configuracao, error: erroConfiguracao } = await supabase
+      .from("configuracoes")
+      .select("coleta_ativa, trava_emergencia, aprovacao_pontuacao_minima")
+      .eq("id", 1)
+      .single()
 
-  return responder(200, { ...resumo, ensaio, travada })
+    if (erroConfiguracao || !configuracao) {
+      resumoErro = erroConfiguracao?.message ?? "configuracoes vazias"
+      return responder(500, { erro: "Nao foi possivel ler as configuracoes" })
+    }
+
+    // Ensaio observa, pontua e relata, mas nunca enfileira. Por isso pode rodar
+    // com a trava de emergencia ligada: nao existe caminho daqui ate uma
+    // publicacao. E o unico jeito de provar a coleta ponta a ponta sem soltar o
+    // freio de mao.
+    let ensaio = false
+    if (bruto !== "") {
+      try {
+        const corpo = JSON.parse(bruto) as Record<string, unknown>
+        ensaio = corpo.modo === "ensaio"
+      } catch {
+        situacaoFinal = "ignorada"
+        metadadosFinais.motivo = "corpo_invalido"
+        return responder(400, { erro: "Corpo nao e JSON valido" })
+      }
+    }
+
+    // A trava de emergencia e freio de PUBLICACAO, nao de observacao.
+    //
+    // Sair aqui era o mesmo defeito que deixou o Radar Rota 34 dias mudo: o
+    // cron reportava sucesso e nada acontecia. Pior ainda, impedia justamente o
+    // que precisa acontecer sob trava — formar o historico de preco, sem o qual
+    // nenhuma oferta e aprovada quando o freio for solto.
+    //
+    // Com a trava ligada o coletor observa, pontua e relata; nao enfileira. Nao
+    // enfileirar e deliberado: fila crescendo com o freio puxado viraria
+    // enxurrada no canal no instante em que ele fosse solto.
+    const travada = configuracao.trava_emergencia === true
+    if (travada) ensaio = true
+
+    metadadosFinais.ensaio = ensaio
+    metadadosFinais.travada = travada
+
+    if (!configuracao.coleta_ativa) {
+      situacaoFinal = "ignorada"
+      metadadosFinais.motivo = "coleta_desligada"
+      return responder(200, { situacao: "coleta_desligada" })
+    }
+
+    let accessToken: string
+    try {
+      accessToken = await obterToken(supabase, identificadorWorker)
+    } catch (erro) {
+      if (erro instanceof RodadaSemToken) {
+        // Nao e falha: e a conexao pedindo espaco — outra rodada renovando, ou
+        // recuo apos erro, ou reautorizacao pendente. Responder 200 evita
+        // encher o log de alarme por algo que se resolve sozinho, ou que so
+        // uma pessoa resolve.
+        console.log("[coletor-ml] rodada encerrada", JSON.stringify({
+          situacao: erro.situacao,
+          motivo: erro.motivo,
+        }))
+        situacaoFinal = "ignorada"
+        metadadosFinais.motivo = erro.situacao
+        metadadosFinais.detalhe = erro.motivo
+        return responder(200, { situacao: erro.situacao, motivo: erro.motivo })
+      }
+
+      const codigo = erro instanceof ErroMercadoLivre ? erro.codigo : "renovacao_falhou"
+      const mensagem = erro instanceof Error ? erro.message : String(erro)
+      console.error("[coletor-ml] token:", mensagem)
+      await supabase.from("erros").insert({
+        chave_idempotencia: `coletor:${codigo}:${Date.now()}`,
+        gravidade: "critico",
+        codigo,
+        mensagem: mensagem.slice(0, 2000),
+      })
+      resumoErro = `${codigo}: ${mensagem}`
+      return responder(502, { erro: "Nao foi possivel obter token do Mercado Livre", codigo })
+    }
+
+    // Lote de itens vencidos. A funcao ja reagenda cada um.
+    const { data: itens, error: erroItens } = await supabase.rpc("ml_itens_para_observar", {
+      p_limite: 5,
+    })
+
+    if (erroItens) {
+      resumoErro = `watchlist: ${erroItens.message}`
+      return responder(500, { erro: "Nao foi possivel ler a watchlist", detalhe: erroItens.message })
+    }
+
+    const observados = (itens ?? []) as ItemObservado[]
+
+    if (observados.length === 0) {
+      situacaoFinal = "ignorada"
+      metadadosFinais.motivo = "nada_vencido"
+      return responder(200, { situacao: "nada_vencido" })
+    }
+
+    resumo.vistos = observados.length
+
+    const minima = Number(configuracao.aprovacao_pontuacao_minima) || 88
+
+    // Sem leitura em lote: o /items?ids= esta fechado. Cada item exige duas
+    // chamadas ao catalogo, entao o lote pequeno da watchlist ja e o teto.
+    for (const observado of observados) {
+      let lido: ItemMl
+
+      try {
+        lido = await lerAnuncioDoCatalogo(
+          observado.produto_catalogo,
+          observado.item_id,
+          accessToken,
+        )
+      } catch (erro) {
+        const mensagem = erro instanceof Error ? erro.message : String(erro)
+        const retentavel = erro instanceof ErroMercadoLivre && erro.retentavel
+        // Falha de rede nao e culpa do item: nao conta contra ele.
+        if (!retentavel) {
+          await supabase.rpc("ml_item_falhou", { p_id: observado.id, p_motivo: mensagem })
+        }
+        resumo.falhas += 1
+        resumo.detalhes.push({ item: observado.item_id ?? observado.produto_catalogo, etapa: "ler", erro: mensagem })
+        continue
+      }
+
+      if (!lido.disponivel) {
+        await supabase.rpc("ml_item_falhou", { p_id: observado.id, p_motivo: "Produto inativo" })
+        resumo.recusados += 1
+        resumo.detalhes.push({ item: observado.item_id ?? observado.produto_catalogo, situacao: "indisponivel" })
+        continue
+      }
+
+      try {
+        await processarItem(supabase, observado, lido, accessToken, minima, ensaio, resumo)
+      } catch (erro) {
+        const mensagem = erro instanceof Error ? erro.message : String(erro)
+        await supabase.rpc("ml_item_falhou", { p_id: observado.id, p_motivo: mensagem })
+        resumo.falhas += 1
+        resumo.detalhes.push({ item: observado.item_id ?? observado.produto_catalogo, etapa: "processar", erro: mensagem })
+      }
+    }
+
+    // Rodada que viu itens e nao conseguiu ler nenhum e falha, mesmo sem
+    // excecao — e o formato de silencio que este registro existe para expor.
+    if (resumo.falhas === 0) {
+      situacaoFinal = "concluida"
+    } else if (resumo.observados === 0) {
+      situacaoFinal = "falhou"
+      resumoErro = `Nenhum item lido em ${resumo.vistos} tentativas.`
+    } else {
+      situacaoFinal = "parcial"
+      resumoErro = `${resumo.falhas} de ${resumo.vistos} itens falharam.`
+    }
+
+    console.log("[coletor-ml] rodada", JSON.stringify({
+      ensaio,
+      travada,
+      vistos: resumo.vistos,
+      enfileirados: resumo.enfileirados,
+      recusados: resumo.recusados,
+      falhas: resumo.falhas,
+    }))
+
+    return responder(200, { ...resumo, ensaio, travada })
+  } catch (erro) {
+    // Excecao nao prevista ainda precisa fechar o registro com a verdade.
+    resumoErro = erro instanceof Error ? erro.message : String(erro)
+    console.error("[coletor-ml] rodada abortada:", resumoErro)
+    return responder(500, { erro: "Rodada abortada" })
+  } finally {
+    if (execucaoId !== null) {
+      const { error: erroFechar } = await supabase.rpc("execucao_fechar", {
+        p_id: execucaoId,
+        p_situacao: situacaoFinal,
+        p_vistos: resumo.vistos,
+        p_inseridos: resumo.observados,
+        p_recusados: resumo.recusados,
+        p_enfileirados: resumo.enfileirados,
+        p_resumo_erro: resumoErro,
+        p_metadados: metadadosFinais,
+      })
+      if (erroFechar) console.error("[coletor-ml] execucao_fechar:", erroFechar.message)
+    }
+  }
 })

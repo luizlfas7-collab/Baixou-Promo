@@ -96,11 +96,21 @@ vencedor da vitrine — que é o que o leitor vê ao clicar.
 ## Operação
 
 ```sql
+select jsonb_pretty(public.saude_da_coleta());       -- a coleta está viva?
 select jsonb_pretty(public.ml_conexao_estado());     -- saúde da conexão
 select jsonb_pretty(public.vistoria_para_soltar());  -- pré-condições
 select jsonb_pretty(public.soltar_trava());          -- libera publicação
 select public.puxar_trava();                         -- freio de mão
 ```
+
+`saude_da_coleta()` é a primeira a consultar quando o canal ficar quieto. Ela
+cruza **rodada** com **leitura de preço** de propósito: coletor que roda e não
+lê é uma falha diferente de coletor que não roda, e as duas precisam aparecer.
+Veredito `muda` significa mais de 20 minutos sem rodada — algo parou.
+
+Cada rodada abre e fecha uma linha em `execucoes`, com contadores e motivo.
+Rodada que morre no meio fica em `rodando` e a faxina a encerra como `falhou`
+depois de 15 minutos, para que "penduradas" reflita problema de agora.
 
 A trava de emergência é freio de **publicação**, não de observação: com ela
 ligada o coletor continua formando histórico, só não enfileira.
