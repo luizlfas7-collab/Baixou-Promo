@@ -368,9 +368,18 @@ Deno.serve(async (requisicao: Request) => {
     }
   }
 
-  if (configuracao.trava_emergencia && !ensaio) {
-    return responder(200, { situacao: "trava_de_emergencia" })
-  }
+  // A trava de emergencia e freio de PUBLICACAO, nao de observacao.
+  //
+  // Sair aqui era o mesmo defeito que deixou o Radar Rota 34 dias mudo: o cron
+  // reportava sucesso e nada acontecia. Pior ainda, impedia justamente o que
+  // precisa acontecer sob trava — formar o historico de preco, sem o qual
+  // nenhuma oferta e aprovada quando o freio for solto.
+  //
+  // Com a trava ligada o coletor observa, pontua e relata; nao enfileira. Nao
+  // enfileirar e deliberado: fila crescendo com o freio puxado viraria
+  // enxurrada no canal no instante em que ele fosse solto.
+  const travada = configuracao.trava_emergencia === true
+  if (travada) ensaio = true
 
   if (!configuracao.coleta_ativa) {
     return responder(200, { situacao: "coleta_desligada" })
@@ -473,11 +482,13 @@ Deno.serve(async (requisicao: Request) => {
   }
 
   console.log("[coletor-ml] rodada", JSON.stringify({
+    ensaio,
+    travada,
     vistos: resumo.vistos,
     enfileirados: resumo.enfileirados,
     recusados: resumo.recusados,
     falhas: resumo.falhas,
   }))
 
-  return responder(200, resumo)
+  return responder(200, { ...resumo, ensaio, travada })
 })
