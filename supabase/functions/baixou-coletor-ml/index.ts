@@ -31,7 +31,8 @@ function responder(status: number, corpo: Record<string, unknown>): Response {
 type ItemObservado = {
   id: number
   item_id: string | null
-  url_afiliado: string
+  /** null quando a linha entrou so para observar preco, sem link de afiliado. */
+  url_afiliado: string | null
   categoria: string
   produto_catalogo: string
 }
@@ -40,6 +41,8 @@ type Resumo = {
   vistos: number
   observados: number
   enfileirados: number
+  /** Pontuou acima do corte mas nao tem link de afiliado. Nao e recusa. */
+  aguardando: number
   recusados: number
   falhas: number
   detalhes: Array<Record<string, unknown>>
@@ -240,6 +243,33 @@ async function processarItem(
     return
   }
 
+  // Linha sem link de afiliado: observa, pontua e para aqui.
+  //
+  // Barrar neste ponto e a primeira de duas defesas. A segunda e a validacao
+  // de payload, que recusaria a URL por estar fora da allowlist de afiliados.
+  // Uma sozinha bastaria; duas porque publicar link errado no canal e pior do
+  // que nao publicar.
+  //
+  // Nao conta como recusa: a oferta e boa, so falta a decisao comercial de
+  // associar o produto ao perfil de afiliado. Some em `aguardando`, e
+  // ml_prontos_para_link() lista o que ja provou que vale o link.
+  if (!observado.url_afiliado) {
+    await supabase.rpc("ml_item_pronto_para_link", {
+      p_id: observado.id,
+      p_pontuacao: pontuacao.total,
+      p_desconto: descontoVerificado,
+    })
+    resumo.aguardando += 1
+    resumo.detalhes.push({
+      item: item.id,
+      situacao: "aguardando_link",
+      catalogo: observado.produto_catalogo,
+      pontuacao: pontuacao.total,
+      desconto: descontoVerificado,
+    })
+    return
+  }
+
   const payload = montarPayload(sinais, observado.url_afiliado)
   const validacao = validarPayloadTelegram(payload)
 
@@ -361,6 +391,7 @@ Deno.serve(async (requisicao: Request) => {
     vistos: 0,
     observados: 0,
     enfileirados: 0,
+    aguardando: 0,
     recusados: 0,
     falhas: 0,
     detalhes: [],
@@ -469,8 +500,14 @@ Deno.serve(async (requisicao: Request) => {
     }
 
     // Lote de itens vencidos. A funcao ja reagenda cada um.
+    //
+    // 10 por rodada, a cada 5 min, da 120 leituras por hora. E o que define o
+    // tempo de revisita: com 120 itens na watchlist, cada um e olhado uma vez
+    // por hora. Lote pequeno demais e watchlist grande viram revisita de
+    // horas, e queda relampago passa batido — o item volta a ser lido depois
+    // que o preco ja subiu.
     const { data: itens, error: erroItens } = await supabase.rpc("ml_itens_para_observar", {
-      p_limite: 5,
+      p_limite: 10,
     })
 
     if (erroItens) {
@@ -542,11 +579,14 @@ Deno.serve(async (requisicao: Request) => {
       resumoErro = `${resumo.falhas} de ${resumo.vistos} itens falharam.`
     }
 
+    metadadosFinais.aguardando_link = resumo.aguardando
+
     console.log("[coletor-ml] rodada", JSON.stringify({
       ensaio,
       travada,
       vistos: resumo.vistos,
       enfileirados: resumo.enfileirados,
+      aguardando: resumo.aguardando,
       recusados: resumo.recusados,
       falhas: resumo.falhas,
     }))

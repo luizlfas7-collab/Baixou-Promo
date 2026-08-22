@@ -115,9 +115,37 @@ depois de 15 minutos, para que "penduradas" reflita problema de agora.
 A trava de emergência é freio de **publicação**, não de observação: com ela
 ligada o coletor continua formando histórico, só não enfileira.
 
+## Observar e publicar são coisas separadas
+
+O link de afiliado **não é necessário para observar**. Ele só faz falta na hora
+de publicar.
+
+Isso inverte o trabalho do operador. Exigir link no cadastro obrigava a gerar
+link no escuro, antes de saber se o produto valia — e por isso a watchlist
+ficou em 8 itens por semanas. Base pequena é o que mais limita resultado: o
+Baixou só anuncia queda que ele mesmo viu, então oportunidade é função direta
+de quantos produtos ele vigia.
+
+Linha sem link observa, forma histórico e pontua igual. Quando passa do corte,
+é carimbada em vez de enfileirada:
+
+```sql
+select * from public.ml_prontos_para_link();   -- já caiu, só falta o link
+select public.ml_item_vincular('MLB00000000', 'https://meli.la/XXXXXXX');
+```
+
+Linha sem link **nunca chega à publicação**, por duas barreiras independentes:
+o coletor nem tenta enfileirar, e a validação de payload recusaria a URL por
+estar fora da allowlist. Uma bastaria; são duas porque publicar link errado no
+canal é pior do que não publicar.
+
 Cadastrar item:
 
 ```sql
+-- Só observando (sem link)
+select public.ml_item_observar('MLB00000000', 'Categoria', 'apelido');
+
+-- Já com link, publica sozinho
 select public.ml_item_cadastrar(
   'MLB00000000',              -- catálogo (obrigatório)
   'https://meli.la/XXXXXXX',  -- link de afiliado
@@ -126,6 +154,15 @@ select public.ml_item_cadastrar(
   100                         -- prioridade
 );
 ```
+
+O id de catálogo está na URL pública de qualquer anúncio
+(`mercadolivre.com.br/p/MLB…`). A busca da API (`/sites/MLB/search`) responde
+403 nesta aplicação, com ou sem token — mesma parede do `/items`.
+
+**Tempo de revisita** é o que decide se queda relâmpago é pega: o coletor lê 10
+itens a cada 5 minutos, ou 120 por hora. Com 130 itens, cada um é olhado uma
+vez por hora. Crescer a watchlist sem crescer o lote transforma revisita em
+horas, e aí o preço já subiu quando o item volta a ser lido.
 
 ## Segredos
 
