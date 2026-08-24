@@ -15,12 +15,27 @@ const COBERTURA_MINIMA = 0.70
 const DESCONTO_PISO = 15
 const DESCONTO_TETO = 30
 
+/**
+ * Segunda porta, trazida do Radar Rota: preco abaixo da propria referencia.
+ *
+ * 13 = 10% abaixo da mediana das medianas diarias. 15 = abaixo do melhor dia
+ * ja visto. Abaixo de 13 nao e vantagem, e preco normal.
+ *
+ * Existe porque queda lenta e queda igual: produto que desceu de a pouco e
+ * pouco ate o fundo nunca acumula 15% entre duas leituras, e com porta unica
+ * jamais viraria post.
+ */
+const FUNDO_PISO = 13
+const FUNDO_TETO = 15
+
 export type Sinais = {
   item: ItemMl
   avaliacao: AvaliacaoMl
   reputacao: ReputacaoVendedor
   /** Desconto que o BANCO apurou contra o proprio historico, nao o que a loja diz. */
   descontoVerificado: number | null
+  /** Competitividade apurada pelo banco (0 a 15). null quando nao deu para medir. */
+  competitividade: number | null
 }
 
 export type Pontuacao = {
@@ -61,24 +76,48 @@ type Componente = {
  * conta e aparece em `ausentes`; se sumir sinal demais, a rodada recusa por
  * cobertura baixa, alto e claro, em vez de silenciosamente nunca aprovar.
  */
-export function pontuar({ item, avaliacao, reputacao, descontoVerificado }: Sinais): Pontuacao {
-  // O desconto verificado nao entra no rateio: ele e a propria tese do post.
-  // Sem ele nao existe oferta, existe so um produto.
-  if (descontoVerificado === null || descontoVerificado < DESCONTO_PISO) {
+export function pontuar(
+  { item, avaliacao, reputacao, descontoVerificado, competitividade }: Sinais,
+): Pontuacao {
+  // Vantagem de preco e a propria tese do post: sem ela nao existe oferta,
+  // existe so um produto. Mas ela tem DUAS portas, e basta uma.
+  //
+  //   1. Queda verificada de 15% contra o proprio historico (movimento).
+  //   2. Preco 10% abaixo da referencia diaria (patamar).
+  //
+  // A segunda veio do Radar Rota. Sem ela, produto que desceu devagar ate o
+  // fundo nunca acumula 15% entre duas leituras e nunca vira post — e queda
+  // lenta e queda igual.
+  const temDesconto = descontoVerificado !== null && descontoVerificado >= DESCONTO_PISO
+  const temFundo = competitividade !== null && competitividade >= FUNDO_PISO
+
+  if (!temDesconto && !temFundo) {
     return {
       total: 0,
       cobertura: 0,
       componentes: {},
-      ausentes: ["desconto_verificado"],
-      recusa: "sem_desconto_verificado",
+      ausentes: ["vantagem_de_preco"],
+      recusa: "sem_vantagem_de_preco",
     }
   }
 
+  const fracaoDesconto = temDesconto
+    ? entre((descontoVerificado! - DESCONTO_PISO) / (DESCONTO_TETO - DESCONTO_PISO), 0, 1)
+    : 0
+
+  // 13 vale 0,7 e 15 vale 1,0: patamar bom conta, mas nao tanto quanto queda
+  // observada, que e o sinal mais forte.
+  const fracaoFundo = temFundo
+    ? 0.7 + entre((competitividade! - FUNDO_PISO) / (FUNDO_TETO - FUNDO_PISO), 0, 1) * 0.3
+    : 0
+
   const componentes: Componente[] = [
     {
-      nome: "desconto",
+      nome: "vantagem",
       peso: 30,
-      fracao: entre((descontoVerificado - DESCONTO_PISO) / (DESCONTO_TETO - DESCONTO_PISO), 0, 1),
+      // A melhor das duas portas, nao a soma: sao duas medidas da mesma coisa,
+      // e somar pagaria duas vezes pelo mesmo fato.
+      fracao: Math.max(fracaoDesconto, fracaoFundo),
       disponivel: true,
     },
     {
@@ -167,24 +206,34 @@ export function montarPayload(
   sinais: Sinais,
   urlAfiliado: string,
 ): PayloadTelegram {
-  const { item, avaliacao, descontoVerificado } = sinais
+  const { item, avaliacao, descontoVerificado, competitividade } = sinais
 
   const linhas: string[] = []
 
   linhas.push(`🔥 <b>${escaparHtml(encurtarTitulo(item.titulo))}</b>`)
   linhas.push("")
 
-  if (descontoVerificado !== null && item.precoOriginal && item.precoOriginal > item.precoAtual) {
+  // A frase precisa dizer qual porta abriu. Escrever "X% abaixo" num post
+  // aprovado por patamar seria inventar um numero que ninguem observou; dizer
+  // so o preco num post aprovado por queda esconderia o que interessa.
+  const temDesconto = descontoVerificado !== null && descontoVerificado >= DESCONTO_PISO
+  const motivo = temDesconto
+    ? `📉 ${descontoVerificado!.toFixed(0)}% abaixo do que já vimos`
+    : competitividade !== null && competitividade >= FUNDO_TETO
+      ? "📉 Menor preço que já vimos neste produto"
+      : competitividade !== null && competitividade >= FUNDO_PISO
+        ? "📉 Abaixo do preço de costume"
+        : null
+
+  if (temDesconto && item.precoOriginal && item.precoOriginal > item.precoAtual) {
     linhas.push(
       `<s>${dinheiro.format(item.precoOriginal)}</s>  →  <b>${dinheiro.format(item.precoAtual)}</b>`,
     )
-    linhas.push(`📉 ${descontoVerificado.toFixed(0)}% abaixo do que já vimos`)
   } else {
     linhas.push(`💰 <b>${dinheiro.format(item.precoAtual)}</b>`)
-    if (descontoVerificado !== null) {
-      linhas.push(`📉 ${descontoVerificado.toFixed(0)}% abaixo do que já vimos`)
-    }
   }
+
+  if (motivo) linhas.push(motivo)
 
   if (avaliacao.nota !== null && avaliacao.total > 0) {
     const estrelas = avaliacao.nota.toFixed(1).replace(".", ",")

@@ -198,7 +198,14 @@ async function processarItem(
     p_url_afiliado: observado.url_afiliado,
     p_url_imagem: item.urlImagem,
     p_preco_original: item.precoOriginal,
-    p_metadados: { categoria: observado.categoria, catalogo: observado.produto_catalogo },
+    // O vendedor entra na observacao para que ml_vantagem_de_preco consiga
+    // separar queda de preco de troca de anunciante. Sem isso, a diferenca
+    // entre dois vendedores do mesmo catalogo passaria por desconto.
+    p_metadados: {
+      categoria: observado.categoria,
+      catalogo: observado.produto_catalogo,
+      vendedor: item.vendedorId === null ? null : String(item.vendedorId),
+    },
   })
 
   if (erroObservar) {
@@ -219,17 +226,57 @@ async function processarItem(
   const descontoBruto = Number((observacao as Record<string, unknown> | null)?.desconto)
   const descontoVerificado = Number.isFinite(descontoBruto) ? descontoBruto : null
 
+  // Segunda porta: patamar de preco contra a referencia diaria. Quem calcula e
+  // o banco, que tem o historico inteiro — o coletor so enxerga a rodada atual
+  // e nao teria como julgar patamar.
+  const ofertaId = Number((observacao as Record<string, unknown> | null)?.oferta_id)
+  let competitividade: number | null = null
+  let referencia: number | null = null
+
+  if (Number.isFinite(ofertaId)) {
+    const { data: vantagem, error: erroVantagem } = await supabase.rpc("ml_vantagem_de_preco", {
+      p_oferta_id: ofertaId,
+    })
+    if (erroVantagem) {
+      // Nao derruba a rodada: sem competitividade sobra a porta do desconto.
+      console.error("[coletor-ml] ml_vantagem_de_preco:", erroVantagem.message)
+    } else {
+      const dados = vantagem as Record<string, unknown> | null
+      const bruto = Number(dados?.competitividade)
+      competitividade = Number.isFinite(bruto) ? bruto : null
+      const ref = Number(dados?.referencia)
+      referencia = Number.isFinite(ref) && ref > 0 ? ref : null
+    }
+  }
+
+  // Quanto este preco esta abaixo do normal, em porcentagem.
+  //
+  // Pela porta do desconto e o proprio desconto observado. Pela porta do
+  // patamar nao existe desconto entre duas leituras, entao a distancia ate a
+  // referencia diaria e o numero honesto — e e ele que o operador olha para
+  // decidir se vale gerar link.
+  const vantagemPct = descontoVerificado ??
+    (referencia !== null
+      ? Math.round(((referencia - item.precoAtual) / referencia) * 10_000) / 100
+      : 0)
+
   const [avaliacao, reputacao] = await Promise.all([
     lerAvaliacao(item.id, accessToken),
     item.vendedorId ? lerReputacao(item.vendedorId, accessToken) : Promise.resolve({ nivel: null, verde: false }),
   ])
 
-  const sinais = { item, avaliacao, reputacao, descontoVerificado }
+  const sinais = { item, avaliacao, reputacao, descontoVerificado, competitividade }
   const pontuacao = pontuar(sinais)
 
   await supabase.rpc("ml_item_observado", { p_id: observado.id })
 
   if (pontuacao.recusa !== null || pontuacao.total < pontuacaoMinima) {
+    // Perdeu a vantagem: o carimbo de "pronto para link" tem de sair junto.
+    // Sem isso ml_prontos_para_link() vira lista de fantasmas, e gerar link
+    // para um deles publicaria oferta que ja acabou.
+    if (!observado.url_afiliado) {
+      await supabase.rpc("ml_item_sem_vantagem", { p_id: observado.id })
+    }
     resumo.recusados += 1
     resumo.detalhes.push({
       item: item.id,
@@ -239,6 +286,7 @@ async function processarItem(
       cobertura: Number(pontuacao.cobertura.toFixed(2)),
       componentes: pontuacao.componentes,
       ausentes: pontuacao.ausentes,
+      competitividade,
     })
     return
   }
@@ -257,7 +305,7 @@ async function processarItem(
     await supabase.rpc("ml_item_pronto_para_link", {
       p_id: observado.id,
       p_pontuacao: pontuacao.total,
-      p_desconto: descontoVerificado,
+      p_desconto: vantagemPct,
     })
     resumo.aguardando += 1
     resumo.detalhes.push({
