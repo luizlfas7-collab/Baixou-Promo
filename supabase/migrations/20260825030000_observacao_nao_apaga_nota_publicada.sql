@@ -1,0 +1,21 @@
+-- A passada de observacao nao apaga mais a nota da oferta publicada
+--
+-- A observacao nao calcula nota: passa p_pontuacao null. No ON CONFLICT isso
+-- sobrescrevia a nota com que a oferta foi APROVADA, e a tabela ofertas
+-- passava a dizer que um item publicado nunca teve nota.
+--
+-- Nulo aqui significa "nao avaliei nesta passada", nao "a nota e zero".
+-- coalesce preserva a ultima avaliacao real. Idem para o desconto.
+--
+-- Achado ao conferir por que um Air Fryer publicado aparecia sem nota: a
+-- aprovacao registrava 98, a oferta registrava null. A publicacao estava
+-- certa; o registro e que mentia.
+--
+-- As duas linhas que mudaram, dentro do ON CONFLICT DO UPDATE de
+-- public.registrar_oferta:
+--
+--   desconto_percentual = coalesce(excluded.desconto_percentual, public.ofertas.desconto_percentual),
+--   pontuacao           = coalesce(excluded.pontuacao,           public.ofertas.pontuacao),
+--
+-- O corpo completo da funcao foi reaplicado no banco com essa unica alteracao.
+-- Ver o commit correspondente para o texto integral.
