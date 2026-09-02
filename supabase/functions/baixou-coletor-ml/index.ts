@@ -549,11 +549,14 @@ Deno.serve(async (requisicao: Request) => {
 
     // Lote de itens vencidos. A funcao ja reagenda cada um.
     //
-    // 10 por rodada, a cada 5 min, da 120 leituras por hora. E o que define o
-    // tempo de revisita: com 120 itens na watchlist, cada um e olhado uma vez
-    // por hora. Lote pequeno demais e watchlist grande viram revisita de
-    // horas, e queda relampago passa batido — o item volta a ser lido depois
-    // que o preco ja subiu.
+    // 10 por rodada, a cada 2 min, da 300 leituras por hora. E o que define o
+    // tempo de revisita: watchlist / leituras por hora. Com 345 itens, cada um
+    // e olhado uma vez a cada ~1h10.
+    //
+    // Este numero e o denominador: crescer a watchlist sem crescer a vazao
+    // estica a revisita, e queda relampago passa batido — o item volta a ser
+    // lido depois que o preco ja subiu. Quem vigia isso e `revisita_horas` em
+    // saude_da_coleta(); nao mexa em um lado sem olhar o outro.
     const { data: itens, error: erroItens } = await supabase.rpc("ml_itens_para_observar", {
       p_limite: 10,
     })
