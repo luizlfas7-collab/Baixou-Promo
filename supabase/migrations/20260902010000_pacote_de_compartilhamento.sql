@@ -13,6 +13,35 @@
 -- plataforma, e o leitor do WhatsApp merece a mesma honestidade do leitor do
 -- Telegram.
 
+-- ---------------------------------------------------------------------------
+-- Dinheiro em formato brasileiro
+--
+-- O to_char usa lc_numeric do servidor, que aqui e americano: saia
+-- "R$ 887.78". Preco com ponto no lugar da virgula denuncia robo mal feito
+-- antes de qualquer outra coisa que o texto diga.
+--
+-- Monta com separadores literais e troca os dois de lugar. Deterministico,
+-- sem depender de locale nenhum.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.dinheiro(p_valor numeric)
+returns text
+language sql
+immutable
+set search_path to ''
+as $$
+  select case when p_valor is null then ''
+         else translate(to_char(round(p_valor, 2), 'FM9,999,990.00'), '.,', ',.')
+         end;
+$$;
+
+comment on function public.dinheiro(numeric) is
+  'Formata em real brasileiro: 1234.5 vira 1.234,50. Nao depende de lc_numeric.';
+
+-- ---------------------------------------------------------------------------
+-- Cada oferta, em tres formatos
+-- ---------------------------------------------------------------------------
+
 create or replace function public.para_compartilhar(p_horas integer default 24)
 returns table (
   publicado_em timestamptz,
@@ -54,12 +83,12 @@ as $$
     r.url_afiliado,
 
     -- WhatsApp: *negrito* e _italico_ sao a marcacao dele. Link no fim, porque
-    -- o app so gera a previa do ultimo link da mensagem.
+    -- o app so gera a previa do ULTIMO link da mensagem.
     E'\U0001F525 ' || r.titulo_curto || E'\n\n' ||
     case when r.preco_original is not null and r.preco_original > r.preco_atual
-         then 'De R$ ' || to_char(r.preco_original, 'FM999G999D00') || ' por *R$ '
-              || to_char(r.preco_atual, 'FM999G999D00') || '*' || E'\n'
-         else '*R$ ' || to_char(r.preco_atual, 'FM999G999D00') || '*' || E'\n'
+         then 'De R$ ' || public.dinheiro(r.preco_original) || ' por *R$ '
+              || public.dinheiro(r.preco_atual) || '*' || E'\n'
+         else '*R$ ' || public.dinheiro(r.preco_atual) || '*' || E'\n'
     end ||
     case when r.desconto_percentual is not null
          then E'\U0001F4C9 ' || to_char(r.desconto_percentual, 'FM990') || '% abaixo do que já vimos' || E'\n'
@@ -69,7 +98,7 @@ as $$
     -- Instagram: link nao clica na legenda. Por isso o texto manda para a bio
     -- em vez de fingir que o link funciona ali.
     E'\U0001F525 ' || r.titulo_curto || E'\n\n' ||
-    'R$ ' || to_char(r.preco_atual, 'FM999G999D00') ||
+    'R$ ' || public.dinheiro(r.preco_atual) ||
     case when r.desconto_percentual is not null
          then ' — ' || to_char(r.desconto_percentual, 'FM990') || '% abaixo do preço de costume'
          else '' end || E'\n\n' ||
@@ -80,7 +109,7 @@ as $$
     -- X: 280 caracteres contando o link. Corta o titulo antes de estourar.
     left(
       E'\U0001F525 ' || left(r.titulo_curto, 90) || E'\n' ||
-      'R$ ' || to_char(r.preco_atual, 'FM999G999D00') ||
+      'R$ ' || public.dinheiro(r.preco_atual) ||
       case when r.desconto_percentual is not null
            then ' (-' || to_char(r.desconto_percentual, 'FM990') || '%)'
            else '' end || E'\n' ||
@@ -127,7 +156,7 @@ begin
       || v_n || '. ' || case when char_length(v_reg.titulo) > 55
                              then left(v_reg.titulo, 52) || '...'
                              else v_reg.titulo end || E'\n'
-      || '   R$ ' || to_char(v_reg.preco_atual, 'FM999G999D00')
+      || '   R$ ' || public.dinheiro(v_reg.preco_atual)
       || case when v_reg.desconto_percentual is not null
               then ' (-' || to_char(v_reg.desconto_percentual, 'FM990') || '%)'
               else '' end || E'\n'
@@ -148,37 +177,10 @@ $$;
 comment on function public.resumo_do_dia(integer) is
   'As melhores ofertas do dia num texto so, pronto para encaminhar. Lista viaja; anuncio avulso nao.';
 
+revoke all on function public.dinheiro(numeric) from public, anon;
 revoke all on function public.para_compartilhar(integer) from public, anon;
 revoke all on function public.resumo_do_dia(integer) from public, anon;
 
+grant execute on function public.dinheiro(numeric) to service_role, authenticated;
 grant execute on function public.para_compartilhar(integer) to service_role, authenticated;
 grant execute on function public.resumo_do_dia(integer) to service_role, authenticated;
-
--- ---------------------------------------------------------------------------
--- Correcao aplicada logo apos o primeiro teste
---
--- O to_char usa lc_numeric do servidor, que aqui e americano: saia
--- "R$ 887.78". Preco com ponto no lugar da virgula denuncia robo mal feito
--- antes de qualquer outra coisa que o texto diga.
---
--- public.dinheiro() monta com separadores literais e troca os dois de lugar.
--- Deterministico, sem depender de locale. Todos os formatos acima passaram a
--- usa-la.
--- ---------------------------------------------------------------------------
-
-create or replace function public.dinheiro(p_valor numeric)
-returns text
-language sql
-immutable
-set search_path to ''
-as $$
-  select case when p_valor is null then ''
-         else translate(to_char(round(p_valor, 2), 'FM9,999,990.00'), '.,', ',.')
-         end;
-$$;
-
-comment on function public.dinheiro(numeric) is
-  'Formata em real brasileiro: 1234.5 vira 1.234,50. Nao depende de lc_numeric.';
-
-revoke all on function public.dinheiro(numeric) from public, anon;
-grant execute on function public.dinheiro(numeric) to service_role, authenticated;
