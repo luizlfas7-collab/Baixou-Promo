@@ -1,0 +1,38 @@
+-- Coletor e worker param de disparar no mesmo minuto
+--
+-- Ao pôr o coletor em */2 na migracao anterior eu criei uma colisao que antes
+-- era rara. O worker sempre foi */2; o coletor era */3. Os dois so caiam no
+-- mesmo minuto quando o minuto era divisivel por 6 — uma rodada em tres. Com o
+-- coletor tambem em */2, passaram a colidir SEMPRE.
+--
+-- A conta que mostra o estrago, sobre 30 horas de cron.job_run_details cruzado
+-- com execucoes (disparo que nao virou rodada = rodada perdida):
+--
+--   antes, minuto de colisao (multiplo de 6):  246 disparos, 3 perdidas  1,2%
+--   antes, coletor sozinho:                    247 disparos, 0 perdidas  0,0%
+--   depois (tudo virou colisao):               160 disparos, 8 perdidas  4,9%
+--
+-- Zero perdas em 247 rodadas solitarias, e todas as perdas nos minutos
+-- compartilhados. Depois da mudanca a taxa subiu para 4,9%, chegando a 12,5%
+-- nas duas ultimas horas.
+--
+-- O mecanismo: as duas Edge Functions comecam chamando cron_secreto_confere,
+-- que le vault.decrypted_secrets e portanto descriptografa. Disparadas no mesmo
+-- instante, uma das duas RPCs falha, e a funcao devolve 500 ANTES de fazer
+-- qualquer trabalho — a rodada inteira se perde. Nao e segredo errado, que
+-- daria 401; e a chamada em si falhando.
+--
+-- Descartado antes de chegar aqui: pool de conexoes (14 de 60 em uso) e
+-- sobreposicao de rodadas (cada rodada dura ~6,5s, identico antes e depois).
+--
+-- A correcao nao custa frequencia a ninguem: o worker vai para os minutos
+-- impares. Continua de 2 em 2 minutos, so que intercalado com o coletor.
+--
+--   coletor  */2      0, 2, 4, 6...
+--   worker   1-59/2   1, 3, 5, 7...
+--
+-- Se a taxa de perda nao cair depois disto, a hipotese da colisao estava
+-- errada e o proximo suspeito e a leitura do cofre em si — que se resolveria
+-- com uma retentativa na Edge Function, nao no agendamento.
+
+select cron.schedule('baixou-worker', '1-59/2 * * * *', $$select public.disparar_worker()$$);
