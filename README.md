@@ -204,6 +204,7 @@ cliques. Então nada aqui produz conteúdo novo: pega a oferta que **já foi
 publicada** e veste ela para onde já existe gente. Quem posta é o dono, à mão.
 
 ```sql
+select * from public.para_o_instagram(24);   -- o que merece Instagram, e em que formato
 select * from public.para_compartilhar(24);  -- WhatsApp, Instagram feed e X
 select public.resumo_do_dia(5);              -- "as melhores de hoje", pronto para encaminhar
 select * from public.para_story(24);         -- Instagram stories
@@ -239,6 +240,52 @@ A coluna `o_preco` avisa quando o preço mudou desde o post do canal. Oferta
 fora do ar não aparece; oferta que subiu aparece marcada e por último, porque a
 `chamada` carrega o preço de hoje e continua correta — o que a alta muda é o
 tamanho da notícia, não a veracidade dela.
+
+### Social Score: nem tudo que vai ao canal merece Instagram
+
+`social_score()` responde uma pergunta diferente da que o motor já respondeu.
+O motor pergunta "isto é um bom negócio"; aqui a pergunta é "isto vira uma boa
+imagem". **O corte já aconteceu** — só chega aqui o que foi publicado. Esta
+nota decide distribuição, nunca qualidade.
+
+A diferença entre as duas perguntas é a razão de a nota existir:
+
+| | desconto | economia | como negócio | como post |
+|---|---|---|---|---|
+| Caneca R$ 29,90 | −40% | R$ 20 | bom | fraco |
+| Geladeira R$ 1.700 | −15% | R$ 300 | ok | forte |
+
+Por isso **economia em reais pesa mais que a porcentagem** (30 contra 22). O
+número que faz parar de rolar a tela é quanto se deixa de gastar, não quantos
+por cento.
+
+Componentes: `economia` 30, `desconto` 22, `qualidade` 20 (a nota que o motor
+já deu), `faixa_de_preco` 16 (compra por impulso mora entre R$ 40 e R$ 600),
+`ineditismo` 12 (produto repetido cansa quem segue mais rápido do que cansa
+quem lê canal).
+
+**A comissão não entra.** Ela ordena a leitura e a fila, que é onde este
+projeto decidiu que dinheiro manda. Aqui ela ficaria perto demais do corte:
+bastaria uma oferta pior render mais para ganhar a vez.
+
+Como em `pontuar()`, o denominador é a soma dos pesos **disponíveis** e há piso
+de cobertura em 0,70. O piso não é decoração: sem ele uma oferta sem preço de
+referência tirava **nota 100 com 23% de cobertura** — sobravam dois componentes,
+os dois cheios por acaso, e a média deles dava o topo da lista. Nota confiante
+feita de nada é pior que nota baixa.
+
+Faixas — e não existe faixa de Reel, porque Reel não tem sticker de link e
+premiar as melhores ofertas com o formato de menor conversão seria autossabotagem:
+
+```
+< 45  → so_o_canal     (não vai para o Instagram)
+45-74 → story
+>= 75 → story_e_feed
+```
+
+A nota ainda é **cega para desempenho**: não existe dado de clique no banco.
+Quando houver rastreio, ele entra como componente novo e os pesos são
+rebalanceados junto.
 
 ## Segredos
 
