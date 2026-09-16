@@ -287,6 +287,43 @@ A nota ainda é **cega para desempenho**: não existe dado de clique no banco.
 Quando houver rastreio, ele entra como componente novo e os pesos são
 rebalanceados junto.
 
+### Saber de onde veio o clique, sem mascarar link
+
+A saída óbvia seria um redirect próprio — `baixou.com/oferta/123` conta o
+clique e repassa para o afiliado. **Não fazemos isso.** É exatamente o padrão
+que `_compartilhado/afiliados.ts` existe para recusar (`temUrlAninhada`,
+`ehLinkDeAfiliado` com query vazia), e programa de afiliado costuma tratar
+como cloaking.
+
+Os dois programas já oferecem o caminho certo: marcar a origem **na hora de
+gerar o link**, não depois na URL.
+
+| | como marca | custo |
+|---|---|---|
+| Shopee | `generateShortLink` aceita `subIds` (até 5), embutidos no próprio `s.shopee.com.br/...` | de graça, o coletor pede junto |
+| Mercado Livre | etiqueta no Portal do Afiliado, com métrica por etiqueta | um link a mais gerado à mão |
+
+Nos dois casos o link continua sendo encurtador oficial, sem query. Nada muda
+para quem clica e nada muda na allowlist.
+
+`links_por_destino` guarda um link **opcional** por destino:
+
+```sql
+select public.link_destino_definir(
+  'mercado_livre', 'MLB00000000', 'instagram_story',
+  'https://meli.la/XXXXXXX', 'baixou-ig-story');
+
+select * from public.rastreio_dos_destinos();  -- o que já está etiquetado
+```
+
+`link_para(oferta, destino)` resolve na ordem **etiquetado > link da oferta >
+link da watchlist**. Enquanto ninguém etiquetar nada, o comportamento é
+byte a byte o de antes — a tabela nasce vazia e a adoção é produto a produto.
+
+E é assim que deve ser usada: etiquete só os poucos produtos que virarem post
+de Instagram. Etiquetar a watchlist inteira reconstruiria justo o gargalo que
+travou a base em 8 itens — gerar link no escuro, antes de saber se vale.
+
 ## Segredos
 
 Nada de segredo neste repositório. O que precisa existir:
