@@ -157,6 +157,11 @@ grant execute on function public.ml_ganho_esperado(text) to service_role, authen
 -- A lista de "pronto para link" mostra quanto cada um renderia
 -- ---------------------------------------------------------------------------
 
+-- Duas colunas novas mudam o tipo de retorno, e `create or replace` nao muda
+-- tipo de retorno — precisa derrubar antes. Sem este drop a migration falha em
+-- banco novo, e com ela para a fila inteira de migrations daqui para a frente.
+drop function if exists public.ml_prontos_para_link();
+
 create or replace function public.ml_prontos_para_link()
 returns table (
   catalogo text,

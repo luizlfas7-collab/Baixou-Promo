@@ -96,6 +96,7 @@ vencedor da vitrine — que é o que o leitor vê ao clicar.
 ## Operação
 
 ```sql
+select jsonb_pretty(public.painel());                -- o resumo de tudo
 select jsonb_pretty(public.saude_da_coleta());       -- a coleta está viva?
 select jsonb_pretty(public.ml_conexao_estado());     -- saúde da conexão
 select jsonb_pretty(public.vistoria_para_soltar());  -- pré-condições
@@ -163,6 +164,81 @@ O id de catálogo está na URL pública de qualquer anúncio
 itens a cada 5 minutos, ou 120 por hora. Com 130 itens, cada um é olhado uma
 vez por hora. Crescer a watchlist sem crescer o lote transforma revisita em
 horas, e aí o preço já subiu quando o item volta a ser lido.
+
+## A watchlist guarda mais de uma loja
+
+`itens_ml` tem nome histórico: hoje ela guarda qualquer plataforma, e cada
+linha diz de quem ela é na coluna `plataforma`. Isso não é organização, é
+segurança de operação — **cada coletor só enxerga as linhas da sua
+plataforma**. Sem esse filtro, o coletor do Mercado Livre pegaria um id de
+Shopee, pediria ao `api.mercadolibre.com` um id que não é dele, tomaria erro e
+queimaria `falhas_seguidas` até desabilitar a linha sozinho. O sintoma pareceria
+defeito da fonte nova.
+
+```sql
+-- Mercado Livre: continua com as funções dele, que sabem das regras dele
+select public.ml_item_observar('MLB00000000', 'Categoria', 'apelido');
+
+-- Outras lojas
+select public.watchlist_cadastrar('shopee', '22334455.99887766', null, 'Áudio', 'fone');
+select public.watchlist_cadastrar('kabum', 'kbm-551122');
+
+select * from public.watchlist_prontos_para_link();   -- já caiu, falta o link
+select public.watchlist_vincular('kabum', 'kbm-551122', 'https://tidd.ly/XXXXXXX');
+```
+
+O ML exige id de **catálogo** e ainda é o único assim — por causa do 403 em
+`/items`, a única porta de leitura dele é `/products/{catálogo}/items`. As
+outras plataformas se identificam pelo próprio id do anúncio. Por isso
+`watchlist_cadastrar` recusa `mercado_livre` de propósito, em vez de aceitar
+pela metade.
+
+Semear a fonte não liga coletor nenhum: as cinco linhas de `fontes` nascem
+desabilitadas, e só o Mercado Livre tem coletor escrito. Shopee, KaBuM e Amazon
+são, por enquanto, configuração à espera de código.
+
+## Distribuição: a mesma oferta, fora do Telegram
+
+O gargalo não é produção, é distribuição — em 7 dias, 24 posts geraram 3
+cliques. Então nada aqui produz conteúdo novo: pega a oferta que **já foi
+publicada** e veste ela para onde já existe gente. Quem posta é o dono, à mão.
+
+```sql
+select * from public.para_compartilhar(24);  -- WhatsApp, Instagram feed e X
+select public.resumo_do_dia(5);              -- "as melhores de hoje", pronto para encaminhar
+select * from public.para_story(24);         -- Instagram stories
+```
+
+O link de afiliado é procurado em dois lugares, nesta ordem: na própria oferta
+e depois na watchlist. Plataforma como a Shopee devolve o link junto com o
+produto, e nesse caso ele mora em `ofertas.url_afiliado`; o Mercado Livre não
+devolve, e aí vale o link cadastrado na watchlist.
+
+### Por que story, e não feed
+
+Na legenda do feed o link não clica — por isso o texto de feed manda para a
+bio, o que custa um toque a mais e derruba quase todo o clique. **No story o
+link clica**, pelo sticker de link, que desde 2021 vale para qualquer perfil.
+
+O segundo motivo é menos óbvio e igualmente forte: **story expira em 24 horas,
+e oferta também**. Post de feed com preço de promoção fica no grid para sempre
+— semanas depois alguém entra, vê `R$ 899`, clica e encontra `R$ 1.299`. O
+story se limpa sozinho, no mesmo ritmo em que a oferta morre.
+
+`para_story()` devolve `link_do_sticker` numa coluna separada, e a `chamada`
+**não contém URL nenhuma**. Não é estilo: URL digitada dentro do story não vira
+link, então o leitor tenta tocar, não acontece nada, e o post inteiro passa
+impressão de robô mal feito. O link vai no sticker; o texto só aponta para ele.
+
+O story sobe à mão, e o sticker é colado à mão. A Graph API do Instagram
+publica story mas **não publica sticker** — nem de link, nem de enquete.
+Automatizar o envio produziria story sem link clicável, ou seja, exatamente o
+que não gera comissão.
+
+A coluna `o_preco` avisa quando o preço mudou desde o post do canal. Oferta
+fora do ar não aparece; oferta que subiu aparece marcada e por último, porque a
+`chamada` carrega o preço de hoje e continua correta — o que a alta muda é o
+tamanho da notícia, não a veracidade dela.
 
 ## Segredos
 
