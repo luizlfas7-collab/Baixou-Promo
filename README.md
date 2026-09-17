@@ -13,7 +13,7 @@ projetos separados, com contas, bancos e canais próprios.
 |---|---|
 | Supabase | projeto `baixou`, ref `xxskmxhpzbqzxoaffiul`, `sa-east-1` |
 | Postgres | 17, com `pg_cron`, `pg_net`, `pgcrypto` e Vault |
-| Edge Functions | `baixou-worker`, `baixou-ml-oauth`, `baixou-coletor-ml` |
+| Edge Functions | `baixou-worker`, `baixou-ml-oauth`, `baixou-coletor-ml`, `baixou-coletor-shopee` |
 
 ## Estrutura
 
@@ -21,10 +21,11 @@ projetos separados, com contas, bancos e canais próprios.
 supabase/
   migrations/          na ordem em que foram aplicadas
   functions/
-    baixou-ml-oauth/   conecta o Mercado Livre e guarda o token no cofre
-    baixou-coletor-ml/ observa preço, pontua, enfileira
-    baixou-worker/     publica no Telegram
-    _compartilhado/    validação do post e allowlist de afiliados
+    baixou-ml-oauth/       conecta o Mercado Livre e guarda o token no cofre
+    baixou-coletor-ml/     observa preço, pontua, enfileira
+    baixou-coletor-shopee/ descobre por palavra-chave e observa
+    baixou-worker/         publica no Telegram
+    _compartilhado/        validação do post e allowlist de afiliados
 ```
 
 ## Como o motor funciona
@@ -96,6 +97,7 @@ vencedor da vitrine — que é o que o leitor vê ao clicar.
 ## Operação
 
 ```sql
+select jsonb_pretty(public.painel());                -- o resumo de tudo
 select jsonb_pretty(public.saude_da_coleta());       -- a coleta está viva?
 select jsonb_pretty(public.ml_conexao_estado());     -- saúde da conexão
 select jsonb_pretty(public.vistoria_para_soltar());  -- pré-condições
@@ -163,6 +165,201 @@ O id de catálogo está na URL pública de qualquer anúncio
 itens a cada 5 minutos, ou 120 por hora. Com 130 itens, cada um é olhado uma
 vez por hora. Crescer a watchlist sem crescer o lote transforma revisita em
 horas, e aí o preço já subiu quando o item volta a ser lido.
+
+## A watchlist guarda mais de uma loja
+
+`itens_ml` tem nome histórico: hoje ela guarda qualquer plataforma, e cada
+linha diz de quem ela é na coluna `plataforma`. Isso não é organização, é
+segurança de operação — **cada coletor só enxerga as linhas da sua
+plataforma**. Sem esse filtro, o coletor do Mercado Livre pegaria um id de
+Shopee, pediria ao `api.mercadolibre.com` um id que não é dele, tomaria erro e
+queimaria `falhas_seguidas` até desabilitar a linha sozinho. O sintoma pareceria
+defeito da fonte nova.
+
+```sql
+-- Mercado Livre: continua com as funções dele, que sabem das regras dele
+select public.ml_item_observar('MLB00000000', 'Categoria', 'apelido');
+
+-- Outras lojas
+select public.watchlist_cadastrar('shopee', '22334455.99887766', null, 'Áudio', 'fone');
+select public.watchlist_cadastrar('kabum', 'kbm-551122');
+
+select * from public.watchlist_prontos_para_link();   -- já caiu, falta o link
+select public.watchlist_vincular('kabum', 'kbm-551122', 'https://tidd.ly/XXXXXXX');
+```
+
+O ML exige id de **catálogo** e ainda é o único assim — por causa do 403 em
+`/items`, a única porta de leitura dele é `/products/{catálogo}/items`. As
+outras plataformas se identificam pelo próprio id do anúncio. Por isso
+`watchlist_cadastrar` recusa `mercado_livre` de propósito, em vez de aceitar
+pela metade.
+
+Semear a fonte não liga coletor nenhum: as cinco linhas de `fontes` nascem
+desabilitadas. Mercado Livre e Shopee têm coletor; KaBuM e Amazon ainda são
+configuração à espera de código.
+
+## Shopee
+
+Não tem OAuth. São dois segredos fixos no cofre — `baixou_shopee_app_id` e
+`baixou_shopee_app_secret` — e cada chamada é assinada na hora:
+
+```
+SHA256(app_id + timestamp + corpo + app_secret)
+```
+
+**A assinatura cobre o corpo exato, byte a byte.** É aqui que quase toda
+integração com essa API tropeça: assinar `JSON.stringify(objeto)` e deixar o
+cliente HTTP serializar o objeto de novo na hora de enviar. Basta um espaço de
+diferença para virar `Invalid Signature`, e a mensagem não diz qual das duas
+serializações mudou. Por isso `enviar()` recebe **string pronta**, nunca objeto.
+
+Duas decisões que valem o comentário:
+
+**O `offerLink` da API não é usado.** Ele costuma vir longo e com query, e a
+allowlist exige encurtador oficial com query vazia. O coletor chama
+`generateShortLink` e obtém um `s.shopee.com.br/...` limpo — que de quebra
+carrega os `subIds` de rastreio.
+
+**Produto com faixa de preço não entra.** `priceMin` diferente de `priceMax`
+significa variações com preços diferentes. Anunciar "R$ 99" quando só a
+variação mais barata custa isso é a forma mais rápida de queimar a confiança de
+quem clica.
+
+E o de sempre: `priceDiscountRate` — o desconto que a Shopee declara — viaja
+como metadado e **nunca** como `preco_original`. Num teste real a loja declarou
+40% e o motor apurou 20,02% contra o próprio histórico. É o número do motor que
+vale.
+
+```sql
+select jsonb_pretty(public.shopee_conexao_estado());  -- conectado? coletando?
+```
+
+## Distribuição: a mesma oferta, fora do Telegram
+
+O gargalo não é produção, é distribuição — em 7 dias, 24 posts geraram 3
+cliques. Então nada aqui produz conteúdo novo: pega a oferta que **já foi
+publicada** e veste ela para onde já existe gente. Quem posta é o dono, à mão.
+
+```sql
+select * from public.para_o_instagram(24);   -- o que merece Instagram, e em que formato
+select * from public.para_compartilhar(24);  -- WhatsApp, Instagram feed e X
+select public.resumo_do_dia(5);              -- "as melhores de hoje", pronto para encaminhar
+select * from public.para_story(24);         -- Instagram stories
+```
+
+O link de afiliado é procurado em dois lugares, nesta ordem: na própria oferta
+e depois na watchlist. Plataforma como a Shopee devolve o link junto com o
+produto, e nesse caso ele mora em `ofertas.url_afiliado`; o Mercado Livre não
+devolve, e aí vale o link cadastrado na watchlist.
+
+### Por que story, e não feed
+
+Na legenda do feed o link não clica — por isso o texto de feed manda para a
+bio, o que custa um toque a mais e derruba quase todo o clique. **No story o
+link clica**, pelo sticker de link, que desde 2021 vale para qualquer perfil.
+
+O segundo motivo é menos óbvio e igualmente forte: **story expira em 24 horas,
+e oferta também**. Post de feed com preço de promoção fica no grid para sempre
+— semanas depois alguém entra, vê `R$ 899`, clica e encontra `R$ 1.299`. O
+story se limpa sozinho, no mesmo ritmo em que a oferta morre.
+
+`para_story()` devolve `link_do_sticker` numa coluna separada, e a `chamada`
+**não contém URL nenhuma**. Não é estilo: URL digitada dentro do story não vira
+link, então o leitor tenta tocar, não acontece nada, e o post inteiro passa
+impressão de robô mal feito. O link vai no sticker; o texto só aponta para ele.
+
+O story sobe à mão, e o sticker é colado à mão. A Graph API do Instagram
+publica story mas **não publica sticker** — nem de link, nem de enquete.
+Automatizar o envio produziria story sem link clicável, ou seja, exatamente o
+que não gera comissão.
+
+A coluna `o_preco` avisa quando o preço mudou desde o post do canal. Oferta
+fora do ar não aparece; oferta que subiu aparece marcada e por último, porque a
+`chamada` carrega o preço de hoje e continua correta — o que a alta muda é o
+tamanho da notícia, não a veracidade dela.
+
+### Social Score: nem tudo que vai ao canal merece Instagram
+
+`social_score()` responde uma pergunta diferente da que o motor já respondeu.
+O motor pergunta "isto é um bom negócio"; aqui a pergunta é "isto vira uma boa
+imagem". **O corte já aconteceu** — só chega aqui o que foi publicado. Esta
+nota decide distribuição, nunca qualidade.
+
+A diferença entre as duas perguntas é a razão de a nota existir:
+
+| | desconto | economia | como negócio | como post |
+|---|---|---|---|---|
+| Caneca R$ 29,90 | −40% | R$ 20 | bom | fraco |
+| Geladeira R$ 1.700 | −15% | R$ 300 | ok | forte |
+
+Por isso **economia em reais pesa mais que a porcentagem** (30 contra 22). O
+número que faz parar de rolar a tela é quanto se deixa de gastar, não quantos
+por cento.
+
+Componentes: `economia` 30, `desconto` 22, `qualidade` 20 (a nota que o motor
+já deu), `faixa_de_preco` 16 (compra por impulso mora entre R$ 40 e R$ 600),
+`ineditismo` 12 (produto repetido cansa quem segue mais rápido do que cansa
+quem lê canal).
+
+**A comissão não entra.** Ela ordena a leitura e a fila, que é onde este
+projeto decidiu que dinheiro manda. Aqui ela ficaria perto demais do corte:
+bastaria uma oferta pior render mais para ganhar a vez.
+
+Como em `pontuar()`, o denominador é a soma dos pesos **disponíveis** e há piso
+de cobertura em 0,70. O piso não é decoração: sem ele uma oferta sem preço de
+referência tirava **nota 100 com 23% de cobertura** — sobravam dois componentes,
+os dois cheios por acaso, e a média deles dava o topo da lista. Nota confiante
+feita de nada é pior que nota baixa.
+
+Faixas — e não existe faixa de Reel, porque Reel não tem sticker de link e
+premiar as melhores ofertas com o formato de menor conversão seria autossabotagem:
+
+```
+< 45  → so_o_canal     (não vai para o Instagram)
+45-74 → story
+>= 75 → story_e_feed
+```
+
+A nota ainda é **cega para desempenho**: não existe dado de clique no banco.
+Quando houver rastreio, ele entra como componente novo e os pesos são
+rebalanceados junto.
+
+### Saber de onde veio o clique, sem mascarar link
+
+A saída óbvia seria um redirect próprio — `baixou.com/oferta/123` conta o
+clique e repassa para o afiliado. **Não fazemos isso.** É exatamente o padrão
+que `_compartilhado/afiliados.ts` existe para recusar (`temUrlAninhada`,
+`ehLinkDeAfiliado` com query vazia), e programa de afiliado costuma tratar
+como cloaking.
+
+Os dois programas já oferecem o caminho certo: marcar a origem **na hora de
+gerar o link**, não depois na URL.
+
+| | como marca | custo |
+|---|---|---|
+| Shopee | `generateShortLink` aceita `subIds` (até 5), embutidos no próprio `s.shopee.com.br/...` | de graça, o coletor pede junto |
+| Mercado Livre | etiqueta no Portal do Afiliado, com métrica por etiqueta | um link a mais gerado à mão |
+
+Nos dois casos o link continua sendo encurtador oficial, sem query. Nada muda
+para quem clica e nada muda na allowlist.
+
+`links_por_destino` guarda um link **opcional** por destino:
+
+```sql
+select public.link_destino_definir(
+  'mercado_livre', 'MLB00000000', 'instagram_story',
+  'https://meli.la/XXXXXXX', 'baixou-ig-story');
+
+select * from public.rastreio_dos_destinos();  -- o que já está etiquetado
+```
+
+`link_para(oferta, destino)` resolve na ordem **etiquetado > link da oferta >
+link da watchlist**. Enquanto ninguém etiquetar nada, o comportamento é
+byte a byte o de antes — a tabela nasce vazia e a adoção é produto a produto.
+
+E é assim que deve ser usada: etiquete só os poucos produtos que virarem post
+de Instagram. Etiquetar a watchlist inteira reconstruiria justo o gargalo que
+travou a base em 8 itens — gerar link no escuro, antes de saber se vale.
 
 ## Segredos
 
