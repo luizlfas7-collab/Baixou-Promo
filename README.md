@@ -13,7 +13,7 @@ projetos separados, com contas, bancos e canais próprios.
 |---|---|
 | Supabase | projeto `baixou`, ref `xxskmxhpzbqzxoaffiul`, `sa-east-1` |
 | Postgres | 17, com `pg_cron`, `pg_net`, `pgcrypto` e Vault |
-| Edge Functions | `baixou-worker`, `baixou-ml-oauth`, `baixou-coletor-ml` |
+| Edge Functions | `baixou-worker`, `baixou-ml-oauth`, `baixou-coletor-ml`, `baixou-coletor-shopee` |
 
 ## Estrutura
 
@@ -21,10 +21,11 @@ projetos separados, com contas, bancos e canais próprios.
 supabase/
   migrations/          na ordem em que foram aplicadas
   functions/
-    baixou-ml-oauth/   conecta o Mercado Livre e guarda o token no cofre
-    baixou-coletor-ml/ observa preço, pontua, enfileira
-    baixou-worker/     publica no Telegram
-    _compartilhado/    validação do post e allowlist de afiliados
+    baixou-ml-oauth/       conecta o Mercado Livre e guarda o token no cofre
+    baixou-coletor-ml/     observa preço, pontua, enfileira
+    baixou-coletor-shopee/ descobre por palavra-chave e observa
+    baixou-worker/         publica no Telegram
+    _compartilhado/        validação do post e allowlist de afiliados
 ```
 
 ## Como o motor funciona
@@ -194,8 +195,44 @@ outras plataformas se identificam pelo próprio id do anúncio. Por isso
 pela metade.
 
 Semear a fonte não liga coletor nenhum: as cinco linhas de `fontes` nascem
-desabilitadas, e só o Mercado Livre tem coletor escrito. Shopee, KaBuM e Amazon
-são, por enquanto, configuração à espera de código.
+desabilitadas. Mercado Livre e Shopee têm coletor; KaBuM e Amazon ainda são
+configuração à espera de código.
+
+## Shopee
+
+Não tem OAuth. São dois segredos fixos no cofre — `baixou_shopee_app_id` e
+`baixou_shopee_app_secret` — e cada chamada é assinada na hora:
+
+```
+SHA256(app_id + timestamp + corpo + app_secret)
+```
+
+**A assinatura cobre o corpo exato, byte a byte.** É aqui que quase toda
+integração com essa API tropeça: assinar `JSON.stringify(objeto)` e deixar o
+cliente HTTP serializar o objeto de novo na hora de enviar. Basta um espaço de
+diferença para virar `Invalid Signature`, e a mensagem não diz qual das duas
+serializações mudou. Por isso `enviar()` recebe **string pronta**, nunca objeto.
+
+Duas decisões que valem o comentário:
+
+**O `offerLink` da API não é usado.** Ele costuma vir longo e com query, e a
+allowlist exige encurtador oficial com query vazia. O coletor chama
+`generateShortLink` e obtém um `s.shopee.com.br/...` limpo — que de quebra
+carrega os `subIds` de rastreio.
+
+**Produto com faixa de preço não entra.** `priceMin` diferente de `priceMax`
+significa variações com preços diferentes. Anunciar "R$ 99" quando só a
+variação mais barata custa isso é a forma mais rápida de queimar a confiança de
+quem clica.
+
+E o de sempre: `priceDiscountRate` — o desconto que a Shopee declara — viaja
+como metadado e **nunca** como `preco_original`. Num teste real a loja declarou
+40% e o motor apurou 20,02% contra o próprio histórico. É o número do motor que
+vale.
+
+```sql
+select jsonb_pretty(public.shopee_conexao_estado());  -- conectado? coletando?
+```
 
 ## Distribuição: a mesma oferta, fora do Telegram
 
