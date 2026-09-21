@@ -8,8 +8,20 @@ const FONTE = "shopee_open_api"
 const FORMATO_URL_SUPABASE = /^https:\/\/[a-z0-9]{20}\.supabase\.co$/
 const LIMITE_CORPO_BYTES = 2048
 
-/** Teto por rodada. A busca devolve muito; a fila e que e estreita. */
-const MAX_PALAVRAS_POR_RODADA = 6
+/**
+ * Teto por rodada, so para impedir que uma configuracao absurda trave a
+ * Edge Function. NAO e a regua de quantas palavras o dono quer: essa vive em
+ * `palavras_chave`.
+ *
+ * Ja custou caro uma vez: o teto era 6 e a configuracao passou a ter 14. O
+ * coletor cortou nas 6 primeiras EM SILENCIO, e como `metadados.palavras`
+ * gravava a contagem DEPOIS do corte, o resumo dizia 6 e batia com o
+ * esperado. As 8 palavras novas nunca rodaram, e nada no banco acusou.
+ *
+ * Por isso agora a rodada grava as duas contagens — configuradas e usadas.
+ * Teto que corta calado e teto que mente.
+ */
+const MAX_PALAVRAS_POR_RODADA = 20
 
 function exigirVariavel(nome: string): string {
   const valor = Deno.env.get(nome)
@@ -40,6 +52,8 @@ type Filtros = {
   ganhoMinimo: number
   limitePorPalavra: number
   palavras: string[]
+  /** Quantas vieram da configuracao, antes do teto. Expoe a truncagem. */
+  palavrasConfiguradas: number
 }
 
 /**
@@ -65,6 +79,7 @@ function lerFiltros(configuracao: Record<string, unknown> | null): Filtros {
     ganhoMinimo: Number(cfg.ganho_minimo ?? 0),
     limitePorPalavra: Math.max(1, Math.min(Number(cfg.limite_por_palavra ?? 10), 50)),
     palavras: palavras.slice(0, MAX_PALAVRAS_POR_RODADA),
+    palavrasConfiguradas: palavras.length,
   }
 }
 
@@ -383,6 +398,12 @@ Deno.serve(async (requisicao: Request) => {
 
     metadadosFinais.recusas_por_filtro = recusasPorFiltro
     metadadosFinais.palavras = filtros.palavras.length
+    metadadosFinais.palavras_configuradas = filtros.palavrasConfiguradas
+    if (filtros.palavrasConfiguradas > filtros.palavras.length) {
+      // Truncagem aparece como aviso, nunca como silencio.
+      metadadosFinais.palavras_ignoradas =
+        filtros.palavrasConfiguradas - filtros.palavras.length
+    }
 
     // Buscar e nao ler nada e o formato de silencio que este registro expoe:
     // a rodada aconteceu, a API respondeu, e mesmo assim nada entrou.
