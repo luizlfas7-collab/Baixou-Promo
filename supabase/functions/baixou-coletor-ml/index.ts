@@ -3,6 +3,8 @@ import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.1
 import { validarPayloadTelegram } from "../_compartilhado/payload.ts"
 import {
   ErroMercadoLivre,
+  esperaGastaMs,
+  iniciarOrcamentoDeRetentativa,
   lerAvaliacao,
   lerAnuncioDoCatalogo,
   lerReputacao,
@@ -557,6 +559,10 @@ Deno.serve(async (requisicao: Request) => {
     // estica a revisita, e queda relampago passa batido — o item volta a ser
     // lido depois que o preco ja subiu. Quem vigia isso e `revisita_horas` em
     // saude_da_coleta(); nao mexa em um lado sem olhar o outro.
+    // O isolate do Deno pode ser reaproveitado entre invocacoes: sem este
+    // reset a rodada herdaria o orcamento ja gasto pela anterior.
+    iniciarOrcamentoDeRetentativa()
+
     const { data: itens, error: erroItens } = await supabase.rpc("ml_itens_para_observar", {
       p_limite: 10,
     })
@@ -631,6 +637,11 @@ Deno.serve(async (requisicao: Request) => {
     }
 
     metadadosFinais.aguardando_link = resumo.aguardando
+
+    // Espera que a retentativa consumiu. Zero e o normal; um numero que sobe
+    // dia apos dia e a API do ML piorando, e isso tem que aparecer antes de
+    // virar rodada estourada.
+    metadadosFinais.espera_de_retentativa_ms = esperaGastaMs()
 
     console.log("[coletor-ml] rodada", JSON.stringify({
       ensaio,
