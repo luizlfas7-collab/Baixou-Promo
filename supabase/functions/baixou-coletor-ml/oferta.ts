@@ -18,14 +18,30 @@ const DESCONTO_TETO = 30
 /**
  * Segunda porta, trazida do Radar Rota: preco abaixo da propria referencia.
  *
- * 13 = 10% abaixo da mediana das medianas diarias. 15 = abaixo do melhor dia
- * ja visto. Abaixo de 13 nao e vantagem, e preco normal.
+ * Escala: 10 = 5% abaixo da mediana das medianas diarias. 13 = 10% abaixo.
+ * 15 = abaixo do melhor dia ja visto. 7 = preco IGUAL ao de costume.
  *
  * Existe porque queda lenta e queda igual: produto que desceu de a pouco e
  * pouco ate o fundo nunca acumula 15% entre duas leituras, e com porta unica
  * jamais viraria post.
+ *
+ * PISO BAIXADO DE 13 PARA 10 em 30/09, decisao do dono, para aumentar volume.
+ * O custo esta medido e aceito: entra produto entre 5% e 10% abaixo da propria
+ * referencia. Continua sendo desconto REAL, apurado contra o historico do
+ * proprio produto — so que menor. Medido antes da mudanca: 2 de 300 ofertas do
+ * ML chegavam a 13; outras 12 estavam em 10.
+ *
+ * 7 e a linha que NAO se atravessa. Competitividade 7 significa preco igual ao
+ * de costume, e publicar isso e chamar preco normal de promocao. A tese
+ * inteira do projeto e que a vitrine mente e nos conferimos; no dia em que o
+ * leitor descobrir que tambem inventamos, nao ha o que reconstruir.
+ *
+ * FUNDO_FORTE existe para o TEXTO, nao para a porta. Produto 5% abaixo e
+ * produto 12% abaixo nao podem receber a mesma frase: seria mentir por
+ * omissao de grau, que e o mesmo defeito do "de/por" que combatemos.
  */
-const FUNDO_PISO = 13
+const FUNDO_PISO = 10
+const FUNDO_FORTE = 13
 const FUNDO_TETO = 15
 
 export type Sinais = {
@@ -221,9 +237,11 @@ export function montarPayload(
     ? `📉 ${descontoVerificado!.toFixed(0)}% abaixo do que já vimos`
     : competitividade !== null && competitividade >= FUNDO_TETO
       ? "📉 Menor preço que já vimos neste produto"
-      : competitividade !== null && competitividade >= FUNDO_PISO
-        ? "📉 Abaixo do preço de costume"
-        : null
+      : competitividade !== null && competitividade >= FUNDO_FORTE
+        ? "📉 Bem abaixo do preço de costume"
+        : competitividade !== null && competitividade >= FUNDO_PISO
+          ? "📉 Abaixo do preço de costume"
+          : null
 
   if (temDesconto && item.precoOriginal && item.precoOriginal > item.precoAtual) {
     linhas.push(

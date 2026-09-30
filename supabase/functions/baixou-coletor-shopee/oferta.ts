@@ -12,7 +12,8 @@ const DESCONTO_PISO = 15
 const DESCONTO_TETO = 30
 
 /** Segunda porta: preco abaixo da propria referencia. Ver oferta.ts do ML. */
-const FUNDO_PISO = 13
+const FUNDO_PISO = 10
+const FUNDO_FORTE = 13
 const FUNDO_TETO = 15
 
 export type SinaisShopee = {
@@ -167,9 +168,11 @@ export function montarPayload(sinais: SinaisShopee): PayloadTelegram {
     ? `📉 ${descontoVerificado!.toFixed(0)}% abaixo do que já vimos`
     : competitividade !== null && competitividade >= FUNDO_TETO
       ? "📉 Menor preço que já vimos neste produto"
-      : competitividade !== null && competitividade >= FUNDO_PISO
-        ? "📉 Abaixo do preço de costume"
-        : null
+      : competitividade !== null && competitividade >= FUNDO_FORTE
+        ? "📉 Bem abaixo do preço de costume"
+        : competitividade !== null && competitividade >= FUNDO_PISO
+          ? "📉 Abaixo do preço de costume"
+          : null
 
   // "A partir de" quando ha variacao: o preco anunciado e o da variacao mais
   // barata, e prometer esse valor para todas seria mentira no clique.
