@@ -156,8 +156,19 @@ function encurtarTitulo(titulo: string): string {
 }
 
 /** Nenhuma URL no texto: o link mora nos botoes, onde a allowlist confere. */
-export function montarPayload(sinais: SinaisShopee): PayloadTelegram {
+export function montarPayload(
+  sinais: SinaisShopee,
+  urlAfiliado?: string,
+): PayloadTelegram {
   const { produto, descontoVerificado, competitividade } = sinais
+
+  // O link que vai ao ar e o que ficou GUARDADO no banco, nao o que chegou
+  // nesta chamada. A Shopee devolve um short link novo a cada requisicao; usar
+  // o volatil fazia o botao do post e a tabela divergirem algumas horas depois
+  // de publicar, e integridade_do_link acusava 'link_trocado' em toda publi.
+  // O coletor do ML sempre fez assim — e por isso nunca teve esse problema.
+  const link = urlAfiliado ?? produto.urlAfiliado
+
   const linhas: string[] = []
 
   linhas.push(`🔥 <b>${escaparHtml(encurtarTitulo(produto.titulo))}</b>`)
@@ -202,7 +213,7 @@ export function montarPayload(sinais: SinaisShopee): PayloadTelegram {
   }
 
   const compartilhar = new URL("https://t.me/share/url")
-  compartilhar.searchParams.set("url", produto.urlAfiliado)
+  compartilhar.searchParams.set("url", link)
   compartilhar.searchParams.set("text", "Achei essa oferta no Baixou")
 
   const payload: PayloadTelegram = {
@@ -210,7 +221,7 @@ export function montarPayload(sinais: SinaisShopee): PayloadTelegram {
     parse_mode: "HTML",
     reply_markup: {
       inline_keyboard: [
-        [{ text: "🛒 Ver oferta", url: produto.urlAfiliado }],
+        [{ text: "🛒 Ver oferta", url: link }],
         [{ text: "↗️ Compartilhar", url: compartilhar.toString() }],
       ],
     },

@@ -155,6 +155,15 @@ async function processarProduto(
   const descontoBruto = Number((observacao as Record<string, unknown> | null)?.desconto)
   const descontoVerificado = Number.isFinite(descontoBruto) ? descontoBruto : null
 
+  // O link ESTAVEL da oferta, devolvido por registrar_oferta. Na primeira vez
+  // que o produto e visto ele e igual ao que veio da API; nas seguintes e o
+  // que ja estava gravado. E esse que tem que ir para o post, senao o botao
+  // publicado e a tabela divergem e o alarme de link vira ruido permanente.
+  const linkBruto = (observacao as Record<string, unknown> | null)?.url_afiliado
+  const linkGuardado = typeof linkBruto === "string" && linkBruto !== ""
+    ? linkBruto
+    : produto.urlAfiliado
+
   const ofertaId = Number((observacao as Record<string, unknown> | null)?.oferta_id)
   let competitividade: number | null = null
 
@@ -182,7 +191,7 @@ async function processarProduto(
     return
   }
 
-  const payload = montarPayload(sinais)
+  const payload = montarPayload(sinais, linkGuardado)
   const validacao = validarPayloadTelegram(payload)
 
   if (!validacao.ok) {
@@ -211,7 +220,7 @@ async function processarProduto(
     p_url_canonica: produto.urlCanonica,
     p_preco_atual: produto.precoAtual,
     p_chave_observacao: chave,
-    p_url_afiliado: produto.urlAfiliado,
+    p_url_afiliado: linkGuardado,
     p_url_imagem: produto.urlImagem,
     p_pontuacao: pontuacao.total,
     p_payload: validacao.payload,
