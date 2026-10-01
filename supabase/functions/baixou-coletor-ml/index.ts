@@ -636,6 +636,50 @@ Deno.serve(async (requisicao: Request) => {
       resumoErro = `${resumo.falhas} de ${resumo.vistos} itens falharam.`
     }
 
+    // A rodada sempre soube por que recusou cada item, e jogava isso fora:
+    // `detalhes` ia so na resposta HTTP, que ninguem le depois. Com o ML em
+    // zero por tres dias, `recusados: 10` sem motivo nenhum foi exatamente o
+    // silencio que impediu o diagnostico. O que a rodada descobre, a rodada
+    // registra.
+    const recusasPorMotivo: Record<string, number> = {}
+    let pontuacaoMaxima: number | null = null
+    let quaseAprovou: Record<string, unknown> | null = null
+
+    for (const detalhe of resumo.detalhes) {
+      const motivo = typeof detalhe.situacao === "string"
+        ? detalhe.situacao
+        : typeof detalhe.etapa === "string"
+          ? `falha_${detalhe.etapa}`
+          : "sem_motivo"
+      recusasPorMotivo[motivo] = (recusasPorMotivo[motivo] ?? 0) + 1
+
+      // So quem foi barrado PELA NOTA entra nesta conta. Item recusado por
+      // vantagem ou por vendedor pode ter nota alta sem significar nada — se
+      // entrasse aqui, diria que o corte esta quase sendo alcancado quando o
+      // corte nem chegou a ser o obstaculo.
+      const nota = detalhe.pontuacao
+      if (motivo === "pontuacao_baixa" && typeof nota === "number") {
+        if (pontuacaoMaxima === null || nota > pontuacaoMaxima) {
+          pontuacaoMaxima = nota
+          quaseAprovou = {
+            item: detalhe.item,
+            pontuacao: nota,
+            cobertura: detalhe.cobertura,
+            componentes: detalhe.componentes,
+            ausentes: detalhe.ausentes,
+          }
+        }
+      }
+    }
+
+    metadadosFinais.recusas_por_motivo = recusasPorMotivo
+    // A nota mais alta da rodada diz se o corte esta perto ou longe: 87 pede
+    // calibragem, 40 significa que o corte nem e o problema. Com os
+    // componentes abertos do item que chegou mais perto, da para ver QUAL
+    // sinal derrubou a nota sem precisar de outra rodada.
+    metadadosFinais.pontuacao_maxima = pontuacaoMaxima
+    if (quaseAprovou !== null) metadadosFinais.quase_aprovou = quaseAprovou
+
     metadadosFinais.aguardando_link = resumo.aguardando
 
     // Espera que a retentativa consumiu. Zero e o normal; um numero que sobe

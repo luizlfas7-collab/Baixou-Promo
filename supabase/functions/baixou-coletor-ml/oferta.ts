@@ -77,6 +77,15 @@ type Componente = {
   /** 0 a 1. So e lido quando o sinal esta disponivel. */
   fracao: number
   disponivel: boolean
+  /**
+   * Se a AUSENCIA deste sinal deve contar contra a cobertura.
+   *
+   * Sinal que a fonte NUNCA entrega nao e evidencia que faltou: e evidencia
+   * que nao existe. Cobrar por ele transforma o piso de cobertura — que existe
+   * para barrar nota calculada no escuro — num veto permanente que nenhum
+   * produto pode vencer, por melhor que seja o preco. Default true.
+   */
+  exigivel?: boolean
 }
 
 /**
@@ -167,6 +176,24 @@ export function pontuar(
       // em vez de valer zero: zero afirmaria que ninguem comprou.
       fracao: item.vendidos === null ? 0 : entre(item.vendidos / 100, 0, 1),
       disponivel: item.vendidos !== null,
+      // NAO exigivel, e isto estava quebrando o motor inteiro.
+      //
+      // `lerAnuncioDoCatalogo` e o UNICO caminho de leitura do ML e fixa
+      // vendidos: null sempre. Logo tracao esta ausente em 100% das leituras,
+      // por construcao, nao por falha.
+      //
+      // Com ela exigivel a conta ficava: piso 0,70 sobre peso 100 permite
+      // faltar 30; os 10 da tracao iam embora de graca, sobravam 20, e
+      // avaliacao pesa 22. Resultado: todo anuncio com menos de 10 avaliacoes
+      // era MATEMATICAMENTE impossivel de publicar, qualquer que fosse o
+      // preco. Medido em 01/10: item MLB4000637681 com competitividade 15
+      // (menor preco ja visto), reputacao 18/18, novo e frete gratis, zerado
+      // por cobertura 0,68.
+      //
+      // E a ironia exata do que o comentario de pontuar() acima descreve: o
+      // piso foi criado para impedir coleta que "funciona" publicando nada, e
+      // virou a causa dela.
+      exigivel: false,
     },
     {
       nome: "frete",
@@ -178,8 +205,17 @@ export function pontuar(
 
   const disponiveis = componentes.filter((c) => c.disponivel)
   const pesoDisponivel = disponiveis.reduce((soma, c) => soma + c.peso, 0)
-  const pesoTotal = componentes.reduce((soma, c) => soma + c.peso, 0)
-  const cobertura = pesoDisponivel / pesoTotal
+
+  // Cobertura mede quanto do que era OBTENIVEL a rodada conseguiu, e por isso
+  // olha so os sinais exigiveis. A NOTA segue usando todos os disponiveis
+  // (pesoDisponivel abaixo): tracao presente continua valendo pontos, ela so
+  // nao cobra pela propria ausencia.
+  const exigiveis = componentes.filter((c) => c.exigivel !== false)
+  const pesoExigivel = exigiveis.reduce((soma, c) => soma + c.peso, 0)
+  const pesoExigivelObtido = exigiveis
+    .filter((c) => c.disponivel)
+    .reduce((soma, c) => soma + c.peso, 0)
+  const cobertura = pesoExigivelObtido / pesoExigivel
 
   const detalhe: Record<string, number> = {}
   for (const c of disponiveis) {
