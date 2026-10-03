@@ -405,6 +405,49 @@ Deno.serve(async (requisicao: Request) => {
       }
     }
 
+    // As recusas que importam nao estavam sendo contadas.
+    //
+    // recusasPorFiltro conta so a PORTEIRA BARATA (preco, nota de estrelas,
+    // vendas, ganho), que roda antes de ir ao banco. Quem passa dela e
+    // pontuado dentro de processarProduto, e ESSAS recusas iam apenas para
+    // `resumo.detalhes` — que existe na resposta HTTP e nunca e gravado.
+    //
+    // MEDIDO em 03/10: de 600 vistos, 221 caem na porteira e 379 chegam a ser
+    // pontuados. Nenhum passa. E nao havia um unico numero no banco dizendo
+    // por que, nem a que distancia do corte. Mesmo defeito que custou tres
+    // dias no coletor do ML.
+    const recusasPorNota: Record<string, number> = {}
+    let pontuacaoMaxima: number | null = null
+    let quaseAprovou: Record<string, unknown> | null = null
+
+    for (const detalhe of resumo.detalhes) {
+      const motivo = typeof detalhe.motivo === "string"
+        ? detalhe.motivo
+        : typeof detalhe.situacao === "string"
+          ? detalhe.situacao
+          : "sem_motivo"
+      recusasPorNota[motivo] = (recusasPorNota[motivo] ?? 0) + 1
+
+      // So quem foi barrado PELO CORTE entra na conta da distancia. Item
+      // recusado por falta de vantagem de preco pode ter nota alta sem
+      // significar nada, e entraria aqui mentindo que o corte esta perto.
+      const nota = detalhe.pontuacao
+      if (motivo === "pontuacao_abaixo_do_minimo" && typeof nota === "number") {
+        if (pontuacaoMaxima === null || nota > pontuacaoMaxima) {
+          pontuacaoMaxima = nota
+          quaseAprovou = { item: detalhe.item, pontuacao: nota }
+        }
+      }
+    }
+
+    metadadosFinais.recusas_por_nota = recusasPorNota
+    // O numero que decide se o corte vale calibragem: 87 pede uma conversa,
+    // 40 significa que o corte nem e o obstaculo e mexer nele seria encher o
+    // canal de preco normal disfarcado de promocao.
+    metadadosFinais.pontuacao_maxima = pontuacaoMaxima
+    if (quaseAprovou !== null) metadadosFinais.quase_aprovou = quaseAprovou
+    metadadosFinais.corte_em_uso = pontuacaoMinima
+
     metadadosFinais.recusas_por_filtro = recusasPorFiltro
     metadadosFinais.palavras = filtros.palavras.length
     metadadosFinais.palavras_configuradas = filtros.palavrasConfiguradas
