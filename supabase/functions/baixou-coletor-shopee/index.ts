@@ -187,6 +187,13 @@ async function processarProduto(
       situacao: "nao_aprovada",
       motivo: pontuacao.recusa ?? "pontuacao_abaixo_do_minimo",
       pontuacao: pontuacao.total,
+      // Sem os componentes, saber POR QUE o quase-aprovado nao passou exigia
+      // reproduzir a formula na mao em SQL. Foi feito em 04/10 e achou o
+      // defeito da tracao — mas so porque deu tempo. A rodada tem a conta na
+      // memoria; guardar e de graca.
+      componentes: pontuacao.componentes,
+      cobertura: Number(pontuacao.cobertura.toFixed(2)),
+      ausentes: pontuacao.ausentes,
     })
     return
   }
@@ -435,7 +442,13 @@ Deno.serve(async (requisicao: Request) => {
       if (motivo === "pontuacao_abaixo_do_minimo" && typeof nota === "number") {
         if (pontuacaoMaxima === null || nota > pontuacaoMaxima) {
           pontuacaoMaxima = nota
-          quaseAprovou = { item: detalhe.item, pontuacao: nota }
+          quaseAprovou = {
+            item: detalhe.item,
+            pontuacao: nota,
+            componentes: detalhe.componentes,
+            cobertura: detalhe.cobertura,
+            ausentes: detalhe.ausentes,
+          }
         }
       }
     }

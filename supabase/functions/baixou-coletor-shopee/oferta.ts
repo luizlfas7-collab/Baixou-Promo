@@ -106,9 +106,33 @@ export function pontuar(
     {
       nome: "tracao",
       peso: 20,
-      // Mil vendas satura. No ML sao cem: la o catalogo e de ticket mais alto e
-      // giro menor, aqui volume alto e o normal e nao a excecao.
-      fracao: produto.vendas === null ? 0 : entre(produto.vendas / 1000, 0, 1),
+      // Satura em 300 vendas, nao em 1000.
+      //
+      // Mil era uma SUPOSICAO ("na Shopee volume alto e o normal") e a medida
+      // de 04/10 desmentiu ela para o unico subconjunto que importa: dos 46
+      // itens com vantagem de preco apurada, a mediana de vendas e ~370, e so
+      // 4 passavam de mil.
+      //
+      // Com saturacao em mil a tracao virava VETO aritmetico. O corte e 88 e os
+      // outros tres pesos somam 80, entao o teto sem tracao e 80: para publicar
+      // era preciso tracao >= 8, ou seja 400 vendas, MESMO com preco perfeito,
+      // nota 5,0 e loja oficial. Com nota 4,8 (15/25) a exigencia subia para
+      // 900. Medido: 'Ataque SHARK X68HE', nota 5,0, loja oficial,
+      // competitividade 13 (bem abaixo do preco de costume), pontuou 82 — ficou
+      // de fora por ter 291 vendas em vez de 400.
+      //
+      // E a mesma forma do defeito que calou o coletor do ML por tres dias: um
+      // componente que, somado a um corte apertado, se torna uma porta que
+      // preco nenhum consegue abrir. Ver o comentario de `exigivel` no
+      // oferta.ts do ML.
+      //
+      // 300 porque e onde o sinal realmente satura: tracao mede se o produto e
+      // real e se o vendedor entrega, e a diferenca entre 400 e 4000 vendas nao
+      // acrescenta confianca — so penaliza quem nao e mega-seller. Quem tem
+      // vendas DE MENOS continua barrado antes, em `vendas_minimas`.
+      //
+      // Efeito medido na mesma amostra de 46: passavam 0, passam 7.
+      fracao: produto.vendas === null ? 0 : entre(produto.vendas / 300, 0, 1),
       disponivel: produto.vendas !== null,
     },
     {
