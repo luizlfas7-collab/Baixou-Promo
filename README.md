@@ -160,9 +160,19 @@ O id de catálogo está na URL pública de qualquer anúncio
 403 nesta aplicação, com ou sem token — mesma parede do `/items`.
 
 **Tempo de revisita** é o que decide se queda relâmpago é pega: o coletor lê 10
-itens a cada 5 minutos, ou 120 por hora. Com 130 itens, cada um é olhado uma
-vez por hora. Crescer a watchlist sem crescer o lote transforma revisita em
-horas, e aí o preço já subiu quando o item volta a ser lido.
+itens a cada 2 minutos, ou 300 por hora. Revisita é `watchlist ÷ leituras por
+hora` — com 345 itens, cada um é olhado uma vez a cada ~1h10. Crescer a
+watchlist sem crescer a vazão transforma revisita em horas, e aí o preço já
+subiu quando o item volta a ser lido.
+
+Esse número degrada em silêncio pelos dois lados, e por isso é medido:
+`revisita_horas` e `revisita_veredito` saem em `saude_da_coleta()`, separados do
+`veredito` de propósito — coletor que roda e não dá conta é uma falha diferente
+de coletor que não roda.
+
+O agendamento mora em migração, não em ajuste manual. Uma vez o `*/2` foi
+aplicado à mão como `*/3`, e passou uma semana custando um terço da vigilância
+sem nenhum alarme tocar.
 
 ## Segredos
 
