@@ -88,3 +88,35 @@ revogados/indisponíveis, erros sanitizados e perfis inválidos.
 As páginas diretas de developers.facebook.com retornaram HTTP 429 durante a
 consulta; a coleção oficial da Meta no Postman foi usada como referência
 disponível. `/me` e os campos acima foram também verificados na execução real.
+
+## Teste de criação de container — 14/10/2026
+
+Autorizado explicitamente pelo usuário, sem publicação. Função separada:
+`baixou-instagram-container-test`, com `verify_jwt = true` e a mesma verificação
+administrativa do diagnóstico. Nenhuma mudança no worker Telegram ou no banco.
+
+- Uma tentativa de `POST https://graph.instagram.com/29009902871968723/media`.
+- Imagem neutra fixa: `https://placehold.co/1080x1080.jpg?text=Baixou%20Teste`.
+  JPEG 1080x1080, HTTP 200 e Content-Type image/jpeg verificados antes do teste.
+- Sem legenda, sem chamada a media_publish e sem URL/destino fornecidos pelo caller.
+- Conta confirmada antes da criação: `_baixoupromocoes_`.
+- Retorno HTTP 200, container `17926039089201655`, inicialmente IN_PROGRESS.
+- Consulta posterior: HTTP 200, `status_code: FINISHED`, `published: false`.
+- Isso comprova criação e processamento de conteúdo com o token atual.
+  Não é comprovação de uma publicação concluída, App Review ou expiração do token.
+
+A versão 2 desabilitou a criação (`CREATION_ENABLED = false`). POST administrativo
+retorna 410; GET administrativo consulta somente o status desse container fixo.
+Não há agendamento. O bloqueio em memória contra repetição da versão de teste era
+por instância, não uma garantia global de idempotência; a criação foi desativada
+após a única execução feita pelo agente. A janela de criação também tinha limite
+de 15 minutos. Reativar exige alteração de código/deploy e nova autorização.
+
+Seis testes locais cobrem rejeição de acesso/inputs, imagem e conta fixas,
+ausência de publicação, erros sem segredos, criação desativada e consulta de status.
+Os testes habilitam a criação apenas nas dependências simuladas; o entrypoint de
+produção não habilita essa opção. Nenhuma credencial foi adicionada ao repositório.
+
+Referência: https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/content-publishing/
+A página direta estava inacessível pela ferramenta; a operação foi verificada
+pela resposta real da API, além das referências oficiais Meta já listadas acima.
