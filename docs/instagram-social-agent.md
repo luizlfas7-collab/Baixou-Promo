@@ -120,3 +120,38 @@ produção não habilita essa opção. Nenhuma credencial foi adicionada ao repo
 Referência: https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/content-publishing/
 A página direta estava inacessível pela ferramenta; a operação foi verificada
 pela resposta real da API, além das referências oficiais Meta já listadas acima.
+
+## Primeiro Story publicado — 15/10/2026
+
+Autorizado expressamente pelo usuário nesta conversa. Conta confirmada como
+BUSINESS via GET /me; antes do lançamento as listas de mídias e Stories estavam
+vazias. A oferta 29756 ainda estava disponível por R$ 145,00 e com observação
+recente. Nenhum token novo foi necessário.
+
+- Vídeo v4 aprovado: 15 s, 1080x1920, logo oficial e marca d'água reduzida.
+- Imagem_url do registro contém a URL HTTPS do vídeo, respeitando a coluna existente.
+- Registro instagram_publicacoes: 3, formato story, situação publicada.
+- Container 17926244568201655: criação HTTP 200 e processamento FINISHED.
+- POST /29009902871968723/media_publish: HTTP 200.
+- Mídia publicada: 18132486715685017.
+- Confirmação independente via GET /29009902871968723/stories: mídia VIDEO presente,
+  timestamp 2026-10-15T23:36:53+0000 (20h36min53s de Brasília).
+- Persistência da confirmação: 2026-10-15T23:36:56.884Z.
+- O vídeo contém URL de afiliado em texto. Não foi incluído sticker clicável.
+
+A função separada baixou-instagram-launch-once foi invocada pelo pg_net usando
+JWT de gateway e autorização aleatória específica de 45 minutos, gerada no
+Vault. Só o hash dessa autorização aparece no código; o valor nunca foi retornado
+pelo SQL nem enviado ao navegador. O token Instagram continuou somente nos Secrets.
+
+A função tinha conta, oferta, registro e vídeo fixos. Compare-and-set durável
+reservou o registro antes da criação e o colocou em revisão antes do envio;
+falha ou resultado desconhecido nunca permite reenvio automático. Cinco testes
+locais verificaram autorização, preço/tipo de conta, formato STORIES, vídeo
+aprovado, bloqueio de duplicidade e estado incerto.
+
+Após a confirmação, o entrypoint foi retirado de operação com HTTP 410,
+verify_jwt continuou habilitado e não há cron. O handler fica no repositório como
+registro auditável e para testes; não é invocado pelo entrypoint retirado.
+Reativação requer nova autorização, novo prazo e código/deploy explícitos.
+O worker Telegram e as funções de coleta não foram modificados nesta etapa.
