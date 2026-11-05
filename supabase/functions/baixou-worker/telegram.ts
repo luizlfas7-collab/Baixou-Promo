@@ -1,4 +1,5 @@
 import type { PayloadTelegram } from "../_compartilhado/payload.ts"
+import type { Repasse } from "../_compartilhado/whatsapp.ts"
 
 export type ResultadoEnvio =
   | { tipo: "enviado"; idMensagem: string; permalink: string | null }
@@ -11,6 +12,8 @@ export type ProblemaTelegram = Extract<ResultadoEnvio, { tipo: "falha" | "descon
 export type ClienteTelegram = {
   conferirCanal: (destino: string) => Promise<ProblemaTelegram | null>
   publicar: (destino: string, payload: PayloadTelegram) => Promise<ResultadoEnvio>
+  /** Manda o post ja formatado para o operador colar no canal do WhatsApp. */
+  repassar: (destino: string, repasse: Repasse) => Promise<ProblemaTelegram | null>
 }
 
 type Opcoes = {
@@ -165,6 +168,34 @@ export function criarClienteTelegram({
       }
 
       return { tipo: "enviado", idMensagem, permalink: permalinkDe(destino, idMensagem) }
+    },
+
+    /**
+     * Entrega o repasse no privado do operador.
+     *
+     * Vai SEM parse_mode de proposito: o texto carrega a marcacao do WhatsApp
+     * (`*` e `~`), e interpretar isso como formatacao do Telegram devolveria a
+     * mensagem bonita na tela e inutil para colar — os caracteres sumiriam
+     * justamente onde precisam aparecer.
+     *
+     * Devolve o problema em vez de lancar: repasse que falha nao pode virar
+     * publicacao que falha.
+     */
+    async repassar(destino, repasse) {
+      const comFoto = typeof repasse.urlImagem === "string" && repasse.urlImagem !== ""
+
+      const corpo: Record<string, unknown> = comFoto
+        ? { chat_id: destino, photo: repasse.urlImagem, caption: repasse.texto }
+        : {
+          chat_id: destino,
+          text: repasse.texto,
+          // Previa aqui so atrapalha quem veio copiar texto.
+          link_preview_options: { is_disabled: true },
+        }
+
+      const envio = await chamar(comFoto ? "sendPhoto" : "sendMessage", corpo, false)
+
+      return "ok" in envio ? null : envio
     },
   }
 }

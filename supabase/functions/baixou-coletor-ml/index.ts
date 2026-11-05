@@ -3,6 +3,8 @@ import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.1
 import { validarPayloadTelegram } from "../_compartilhado/payload.ts"
 import {
   ErroMercadoLivre,
+  esperaGastaMs,
+  iniciarOrcamentoDeRetentativa,
   lerAvaliacao,
   lerAnuncioDoCatalogo,
   lerReputacao,
@@ -549,11 +551,18 @@ Deno.serve(async (requisicao: Request) => {
 
     // Lote de itens vencidos. A funcao ja reagenda cada um.
     //
-    // 10 por rodada, a cada 5 min, da 120 leituras por hora. E o que define o
-    // tempo de revisita: com 120 itens na watchlist, cada um e olhado uma vez
-    // por hora. Lote pequeno demais e watchlist grande viram revisita de
-    // horas, e queda relampago passa batido — o item volta a ser lido depois
-    // que o preco ja subiu.
+    // 10 por rodada, a cada 2 min, da 300 leituras por hora. E o que define o
+    // tempo de revisita: watchlist / leituras por hora. Com 345 itens, cada um
+    // e olhado uma vez a cada ~1h10.
+    //
+    // Este numero e o denominador: crescer a watchlist sem crescer a vazao
+    // estica a revisita, e queda relampago passa batido — o item volta a ser
+    // lido depois que o preco ja subiu. Quem vigia isso e `revisita_horas` em
+    // saude_da_coleta(); nao mexa em um lado sem olhar o outro.
+    // O isolate do Deno pode ser reaproveitado entre invocacoes: sem este
+    // reset a rodada herdaria o orcamento ja gasto pela anterior.
+    iniciarOrcamentoDeRetentativa()
+
     const { data: itens, error: erroItens } = await supabase.rpc("ml_itens_para_observar", {
       p_limite: 10,
     })
@@ -627,7 +636,56 @@ Deno.serve(async (requisicao: Request) => {
       resumoErro = `${resumo.falhas} de ${resumo.vistos} itens falharam.`
     }
 
+    // A rodada sempre soube por que recusou cada item, e jogava isso fora:
+    // `detalhes` ia so na resposta HTTP, que ninguem le depois. Com o ML em
+    // zero por tres dias, `recusados: 10` sem motivo nenhum foi exatamente o
+    // silencio que impediu o diagnostico. O que a rodada descobre, a rodada
+    // registra.
+    const recusasPorMotivo: Record<string, number> = {}
+    let pontuacaoMaxima: number | null = null
+    let quaseAprovou: Record<string, unknown> | null = null
+
+    for (const detalhe of resumo.detalhes) {
+      const motivo = typeof detalhe.situacao === "string"
+        ? detalhe.situacao
+        : typeof detalhe.etapa === "string"
+          ? `falha_${detalhe.etapa}`
+          : "sem_motivo"
+      recusasPorMotivo[motivo] = (recusasPorMotivo[motivo] ?? 0) + 1
+
+      // So quem foi barrado PELA NOTA entra nesta conta. Item recusado por
+      // vantagem ou por vendedor pode ter nota alta sem significar nada — se
+      // entrasse aqui, diria que o corte esta quase sendo alcancado quando o
+      // corte nem chegou a ser o obstaculo.
+      const nota = detalhe.pontuacao
+      if (motivo === "pontuacao_baixa" && typeof nota === "number") {
+        if (pontuacaoMaxima === null || nota > pontuacaoMaxima) {
+          pontuacaoMaxima = nota
+          quaseAprovou = {
+            item: detalhe.item,
+            pontuacao: nota,
+            cobertura: detalhe.cobertura,
+            componentes: detalhe.componentes,
+            ausentes: detalhe.ausentes,
+          }
+        }
+      }
+    }
+
+    metadadosFinais.recusas_por_motivo = recusasPorMotivo
+    // A nota mais alta da rodada diz se o corte esta perto ou longe: 87 pede
+    // calibragem, 40 significa que o corte nem e o problema. Com os
+    // componentes abertos do item que chegou mais perto, da para ver QUAL
+    // sinal derrubou a nota sem precisar de outra rodada.
+    metadadosFinais.pontuacao_maxima = pontuacaoMaxima
+    if (quaseAprovou !== null) metadadosFinais.quase_aprovou = quaseAprovou
+
     metadadosFinais.aguardando_link = resumo.aguardando
+
+    // Espera que a retentativa consumiu. Zero e o normal; um numero que sobe
+    // dia apos dia e a API do ML piorando, e isso tem que aparecer antes de
+    // virar rodada estourada.
+    metadadosFinais.espera_de_retentativa_ms = esperaGastaMs()
 
     console.log("[coletor-ml] rodada", JSON.stringify({
       ensaio,

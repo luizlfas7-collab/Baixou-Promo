@@ -18,14 +18,30 @@ const DESCONTO_TETO = 30
 /**
  * Segunda porta, trazida do Radar Rota: preco abaixo da propria referencia.
  *
- * 13 = 10% abaixo da mediana das medianas diarias. 15 = abaixo do melhor dia
- * ja visto. Abaixo de 13 nao e vantagem, e preco normal.
+ * Escala: 10 = 5% abaixo da mediana das medianas diarias. 13 = 10% abaixo.
+ * 15 = abaixo do melhor dia ja visto. 7 = preco IGUAL ao de costume.
  *
  * Existe porque queda lenta e queda igual: produto que desceu de a pouco e
  * pouco ate o fundo nunca acumula 15% entre duas leituras, e com porta unica
  * jamais viraria post.
+ *
+ * PISO BAIXADO DE 13 PARA 10 em 30/09, decisao do dono, para aumentar volume.
+ * O custo esta medido e aceito: entra produto entre 5% e 10% abaixo da propria
+ * referencia. Continua sendo desconto REAL, apurado contra o historico do
+ * proprio produto — so que menor. Medido antes da mudanca: 2 de 300 ofertas do
+ * ML chegavam a 13; outras 12 estavam em 10.
+ *
+ * 7 e a linha que NAO se atravessa. Competitividade 7 significa preco igual ao
+ * de costume, e publicar isso e chamar preco normal de promocao. A tese
+ * inteira do projeto e que a vitrine mente e nos conferimos; no dia em que o
+ * leitor descobrir que tambem inventamos, nao ha o que reconstruir.
+ *
+ * FUNDO_FORTE existe para o TEXTO, nao para a porta. Produto 5% abaixo e
+ * produto 12% abaixo nao podem receber a mesma frase: seria mentir por
+ * omissao de grau, que e o mesmo defeito do "de/por" que combatemos.
  */
-const FUNDO_PISO = 13
+const FUNDO_PISO = 10
+const FUNDO_FORTE = 13
 const FUNDO_TETO = 15
 
 export type Sinais = {
@@ -61,6 +77,15 @@ type Componente = {
   /** 0 a 1. So e lido quando o sinal esta disponivel. */
   fracao: number
   disponivel: boolean
+  /**
+   * Se a AUSENCIA deste sinal deve contar contra a cobertura.
+   *
+   * Sinal que a fonte NUNCA entrega nao e evidencia que faltou: e evidencia
+   * que nao existe. Cobrar por ele transforma o piso de cobertura — que existe
+   * para barrar nota calculada no escuro — num veto permanente que nenhum
+   * produto pode vencer, por melhor que seja o preco. Default true.
+   */
+  exigivel?: boolean
 }
 
 /**
@@ -151,6 +176,24 @@ export function pontuar(
       // em vez de valer zero: zero afirmaria que ninguem comprou.
       fracao: item.vendidos === null ? 0 : entre(item.vendidos / 100, 0, 1),
       disponivel: item.vendidos !== null,
+      // NAO exigivel, e isto estava quebrando o motor inteiro.
+      //
+      // `lerAnuncioDoCatalogo` e o UNICO caminho de leitura do ML e fixa
+      // vendidos: null sempre. Logo tracao esta ausente em 100% das leituras,
+      // por construcao, nao por falha.
+      //
+      // Com ela exigivel a conta ficava: piso 0,70 sobre peso 100 permite
+      // faltar 30; os 10 da tracao iam embora de graca, sobravam 20, e
+      // avaliacao pesa 22. Resultado: todo anuncio com menos de 10 avaliacoes
+      // era MATEMATICAMENTE impossivel de publicar, qualquer que fosse o
+      // preco. Medido em 01/10: item MLB4000637681 com competitividade 15
+      // (menor preco ja visto), reputacao 18/18, novo e frete gratis, zerado
+      // por cobertura 0,68.
+      //
+      // E a ironia exata do que o comentario de pontuar() acima descreve: o
+      // piso foi criado para impedir coleta que "funciona" publicando nada, e
+      // virou a causa dela.
+      exigivel: false,
     },
     {
       nome: "frete",
@@ -162,8 +205,17 @@ export function pontuar(
 
   const disponiveis = componentes.filter((c) => c.disponivel)
   const pesoDisponivel = disponiveis.reduce((soma, c) => soma + c.peso, 0)
-  const pesoTotal = componentes.reduce((soma, c) => soma + c.peso, 0)
-  const cobertura = pesoDisponivel / pesoTotal
+
+  // Cobertura mede quanto do que era OBTENIVEL a rodada conseguiu, e por isso
+  // olha so os sinais exigiveis. A NOTA segue usando todos os disponiveis
+  // (pesoDisponivel abaixo): tracao presente continua valendo pontos, ela so
+  // nao cobra pela propria ausencia.
+  const exigiveis = componentes.filter((c) => c.exigivel !== false)
+  const pesoExigivel = exigiveis.reduce((soma, c) => soma + c.peso, 0)
+  const pesoExigivelObtido = exigiveis
+    .filter((c) => c.disponivel)
+    .reduce((soma, c) => soma + c.peso, 0)
+  const cobertura = pesoExigivelObtido / pesoExigivel
 
   const detalhe: Record<string, number> = {}
   for (const c of disponiveis) {
@@ -221,9 +273,11 @@ export function montarPayload(
     ? `📉 ${descontoVerificado!.toFixed(0)}% abaixo do que já vimos`
     : competitividade !== null && competitividade >= FUNDO_TETO
       ? "📉 Menor preço que já vimos neste produto"
-      : competitividade !== null && competitividade >= FUNDO_PISO
-        ? "📉 Abaixo do preço de costume"
-        : null
+      : competitividade !== null && competitividade >= FUNDO_FORTE
+        ? "📉 Bem abaixo do preço de costume"
+        : competitividade !== null && competitividade >= FUNDO_PISO
+          ? "📉 Abaixo do preço de costume"
+          : null
 
   if (temDesconto && item.precoOriginal && item.precoOriginal > item.precoAtual) {
     linhas.push(
