@@ -98,6 +98,62 @@ defeito.
 Ja resolvido: chat id 8660036653 gravado em `alerta_telegram_chat_id`; repasse do
 WhatsApp ligado; vigia agendado (job `baixou-vigia`).
 
+## Distribuicao: canal do WhatsApp (decidido em 05/11)
+
+O dono criou um canal no WhatsApp e escolheu, por ora, **copiar e colar a mao**
+o post que o repasse entrega. A automacao fica para depois, em cima de um canal
+que ja tenha audiencia.
+
+Como funciona hoje, e nao precisa de nada novo:
+
+1. Motor acha a oferta e valida a vantagem de preco.
+2. Publica no `@aixou_promocoes` com o link de afiliado do dono.
+3. O worker converte o MESMO payload com `montarRepasseWhatsapp()` e manda o
+   texto pronto para `configuracoes.repasse_whatsapp_chat_id` via Telegram.
+4. O dono copia e cola no canal do WhatsApp.
+
+Atende as duas fontes (ML e Shopee) sem configuracao separada, porque converte
+o payload publicado e nao a origem.
+
+### Por que a publicacao automatica nao entrou
+
+A Meta nao expoe Canais no Cloud API: nao existe endpoint oficial. As
+bibliotecas que publicam em canal falam o protocolo do WhatsApp Web por
+engenharia reversa e funcionam ate o numero ser banido, sem aviso e sem
+recurso. O caminho oficial (mensagem de marketing 1:1) sai a ~R$ 0,35 por
+mensagem entregue: com 7 posts/dia, R$ 73,50 por mes POR INSCRITO.
+
+### Quando a automacao voltar a mesa
+
+O banco JA esta pronto: `fila_publicacao.canal` e `estado_destino.canal`
+aceitam `'whatsapp'`, e o worker recusa item de canal diferente do seu
+`canalPermitido` — entao um segundo worker com `canalPermitido = 'whatsapp'`
+consome as linhas de WhatsApp sem tocar no que ja roda.
+
+O que falta e infraestrutura: a sessao do WhatsApp Web precisa de maquina
+ligada 24h, e Edge Function e sem estado. **Hospedagem gratuita que dorme e
+ativamente ruim aqui**: host dormiu, sessao caiu, QR de novo — e login
+repetido e justamente o padrao que aumenta risco de ban.
+
+Cautelas levantadas em 05/11, em ordem do que mais reduz risco:
+
+1. Chip dedicado, nunca o numero pessoal. (O dono ja tem.)
+2. Aquecer o chip com uso humano normal por 2-3 semanas antes de automatizar.
+   Chip novo que comeca a transmitir no primeiro dia tem perfil de descartavel.
+3. Manter o volume e o espacamento atuais (6-7/dia, 1 a cada 10 min). Nunca
+   publicar em lote.
+4. Uma sessao, um host, sem login/logout repetido e sem IP variando.
+5. SO publicar no canal: sem auto-resposta, sem DM, sem adicionar ninguem.
+6. Segundo admin no canal. **NAO CONFIRMADO** se o canal sobrevive intacto ao
+   ban do numero criador — verificar antes de contar com isso.
+
+A publicar em canal, o gatilho mais forte de ban (denuncia de destinatario) fica
+enfraquecido: quem segue escolheu seguir, e quem nao quer mais deixa de seguir.
+
+Se a automacao entrar, entra com: interruptor no banco (desliga sem redeploy),
+o repasse para o Telegram seguindo em paralelo como caminho de reserva, sinal
+de saude no boletim, recuo conservador em falha e jitter no horario.
+
 ## Alarmes vivem no banco, nao na sessao
 
 `alarme_entrega` e `ofertas_perdidas` rodam dentro do Postgres e aparecem no
