@@ -5,6 +5,7 @@ import html
 import json
 import sqlite3
 import time
+import textwrap
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
@@ -269,17 +270,26 @@ def render(draft, logo, product):
     """SVG review artifact embeds exact source bytes. No generated product or logo."""
     esc = html.escape
     title = draft["titulo"]
-    lines = [title[i:i+38] for i in range(0, len(title), 38)]
-    text = "".join(f'<tspan x="60" dy="42">{esc(line)}</tspan>' for line in lines[:7])
+    lines = textwrap.wrap(title, width=38, break_long_words=False, break_on_hyphens=False)
+    compact = len(lines) > 4
+    if compact:
+        lines = textwrap.wrap(title, width=52, break_long_words=True, break_on_hyphens=False)
+    previous_price = f"{Decimal(draft['preco_anterior_observado']):.2f}".replace('.', ',')
+    current_price = f"{Decimal(draft['preco_atual']):.2f}".replace('.', ',')
+    line_height = 32 if compact else 42
+    title_size = 28 if compact else 34
+    text = "".join(f'<tspan x="60" dy="{line_height}">{esc(line)}</tspan>' for line in lines)
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1350" viewBox="0 0 1080 1350">
 <rect width="1080" height="1350" fill="#080808"/>
 <image href="{logo}" x="60" y="20" width="640" height="170" preserveAspectRatio="xMinYMid meet"/>
 <rect x="60" y="200" width="960" height="590" fill="white"/>
 <image href="{product}" x="70" y="210" width="940" height="570" preserveAspectRatio="xMidYMid meet"/>
-<text y="820" fill="#fff5e2" font-size="34" font-family="Arial">{text}</text>
+<text y="820" fill="#fff5e2" font-size="{title_size}" font-family="Arial">{text}</text>
+<text x="60" y="1040" fill="#ff7900" font-size="54" font-family="Arial" font-weight="bold">{draft['desconto_percentual']}% DE QUEDA</text>
+<text x="60" y="1085" fill="#fff5e2" font-size="25" font-family="Arial">sobre o preço anterior observado</text>
 <rect x="0" y="1165" width="1080" height="185" fill="#ff7900"/>
-<text x="60" y="1210" fill="#080808" font-size="28" font-family="Arial">Anterior observado: R$ {draft['preco_anterior_observado']}</text>
-<text x="60" y="1280" fill="#080808" font-size="58" font-family="Arial">Agora R$ {draft['preco_atual']}</text>
+<text x="60" y="1210" fill="#080808" font-size="28" font-family="Arial">Anterior observado: R$ {previous_price}</text>
+<text x="60" y="1280" fill="#080808" font-size="58" font-family="Arial">Agora R$ {current_price}</text>
 <text x="60" y="1330" fill="#080808" font-size="22" font-family="Arial">PUBLICIDADE • LINK DE AFILIADO • Preço e estoque sujeitos a alteração</text></svg>'''
 
 
