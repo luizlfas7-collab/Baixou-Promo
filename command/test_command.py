@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from .cli import handoff_sql, main
-from .core import Blocked, Store, authorize, digest, policy, process_one, validate, valid_url
+from .core import Blocked, Store, authorize, default_brand, digest, logo_asset, policy, process_one, validate, valid_url
 from .source import NoRedirect, SupabaseReader, original_image
 
 
@@ -132,6 +132,11 @@ class CommandTests(unittest.TestCase):
         row = self.store.db.execute("SELECT * FROM tasks").fetchone()
         self.assertEqual(row["reason"], "official_logo_missing")
         self.assertEqual(self.store.db.execute("SELECT kind FROM notifications").fetchone()[0], "blocked")
+
+    def test_official_horizontal_brand_is_default_and_hash_matches(self):
+        path, sha = default_brand()
+        self.assertEqual(path.name, 'logo-horizontal-colorida-transparente.png')
+        self.assertTrue(logo_asset(path, sha).startswith('data:image/png;base64,'))
 
     def test_exception_sanitized(self):
         self.store.enqueue(evidence())

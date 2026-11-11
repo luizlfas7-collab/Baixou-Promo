@@ -40,8 +40,10 @@ administrador do computador.
   incluindo `shopee_vantagem_de_preco` e `vantagem_de_preco_base`.
   Revisar isso separadamente: não houve alteração de permissões nesta entrega.
   [Orientação do advisor](https://supabase.com/docs/guides/database/database-linter?lint=0028_anon_security_definer_function_executable).
-- A conversa referenciada não devolveu anexos. A logo oficial não está disponível
-  como arquivo fonte. Nenhum desenho substituto foi criado ou extraído de outra arte.
+- A conversa referenciada inicialmente não devolveu anexos. O usuário forneceu
+  depois os três arquivos oficiais, agora preservados em `assets/brand`, com
+  SHA256 no manifesto. A horizontal completa é o padrão das artes; a completa
+  quadrada serve ao perfil e o símbolo a espaços pequenos. Nenhuma marca foi redesenhada.
 
 ## Regras da primeira versão
 
@@ -68,7 +70,7 @@ As condições conservadoras de seleção são:
    da loja. Percentual é calculado e arredondado para baixo, sem inventar desconto.
 4. Link HTTPS em allowlist exata de afiliados; imagem em CDN oficial. Sem
    credenciais, parâmetros, fragmentos, portas, destinos livres ou redirects.
-5. Logo PNG oficial fornecida pelo operador, conferida por SHA256. Isso verifica
+5. Logo PNG oficial horizontal incluída no projeto, conferida por SHA256. Isso verifica
    os bytes escolhidos pelo operador, não autentica automaticamente sua origem.
 6. Imagem original obtida com limite de bytes e tempo, PNG/JPEG; os bytes originais
    e os da logo são incorporados ao SVG sem redesenhar produto ou marca.
@@ -128,6 +130,7 @@ Não é preciso expor nem alterar chave de produção para rodar os testes offli
 
 ```powershell
 python -m command.cli sync
+# A logo horizontal oficial já é o padrão: python -m command.cli run
 $logoHash = (Get-FileHash -Algorithm SHA256 'C:\Baixou\logo-oficial.png').Hash.ToLower()
 python -m command.cli run --logo 'C:\Baixou\logo-oficial.png' --logo-sha256 $logoHash
 python -m command.cli status
@@ -181,7 +184,7 @@ preservar o SQLite para auditoria. Os trabalhadores antigos seguem independentes
 
 ## Verificação e pendências
 
-18 testes novos passaram: preço observado, estoque, fonte Telegram, evidência
+19 testes novos passaram: preço observado, estoque, fonte Telegram, evidência
 vencida, URLs, duplicidade persistente, disputa concorrente, reserva vencida,
 token antigo, orçamento de retentativas, logo ausente, falha sanitizada,
 aprovação/hash/prazo/política, SQL com título hostil, proibição de ações sensíveis
@@ -193,9 +196,19 @@ localmente: oferta 14387 bloqueada por ausência de preço anterior maior na jan
 bloqueadas por logo ausente. Não constituem recomendação atual de publicação:
 preços e prazos precisam ser revalidados. Nenhuma oferta foi gravada no Supabase.
 
-Pendências: arquivo oficial da logo; revisão visual com arte real; JPEG final e
+Pendências: revisão visual com arte real; JPEG final e
 hospedagem imutável; teste Postgres do handoff; credencial de leitura e teste REST
 com o ambiente autorizado; sincronizar o código remoto ausente para controle de
 versão em trabalho separado; eventual aprovação de implantação/agendamento;
 canal privado para notificações externas; publicador e suas autorizações de
 conta/regras/limites. Não há publicação automática nesta entrega.
+
+## Arquivos oficiais de identidade incorporados
+
+Os três modelos enviados pelo usuário estão em `assets/brand`. `manifest.json`
+registra seus hashes. `python -m command.cli run` usa a horizontal completa sem
+parâmetros adicionais. O cabeçalho reserva 640×170 px para manter a proporção
+2400×640 e a leitura do nome. Perfil e símbolo permanecem como alternativas
+originais; não substituem automaticamente a assinatura completa nas ofertas.
+A falta da logo fonte foi resolvida; isso não libera publicação nem reaproveita
+evidências de preço vencidas.

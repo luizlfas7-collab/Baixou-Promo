@@ -1,12 +1,18 @@
 param(
-    [Parameter(Mandatory=$true)][string]$LogoPath,
-    [Parameter(Mandatory=$true)][string]$LogoSha256,
+    [string]$LogoPath,
+    [string]$LogoSha256,
     [switch]$NoSync
 )
 $ErrorActionPreference = 'Stop'
 $commandRoot = Split-Path -Parent $PSScriptRoot
 Push-Location -LiteralPath $commandRoot
 try {
+    if (-not $LogoPath -and -not $LogoSha256) {
+        $brandManifest = Get-Content -LiteralPath assets/brand/manifest.json -Raw | ConvertFrom-Json
+        $brandAsset = $brandManifest.variants.($brandManifest.default)
+        $LogoPath = Join-Path $commandRoot ('assets/brand/' + $brandAsset.file)
+        $LogoSha256 = $brandAsset.sha256
+    }
     if (-not $NoSync) {
         python -m command.cli sync
         if ($LASTEXITCODE -ne 0) { throw 'Falha na leitura; conferir notificações locais.' }

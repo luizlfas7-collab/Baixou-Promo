@@ -6,7 +6,7 @@ import sys
 import time
 from pathlib import Path
 
-from .core import Blocked, Store, authorize, canonical, digest, policy, process_one, validate
+from .core import Blocked, Store, authorize, canonical, default_brand, digest, policy, process_one, validate
 from .source import SupabaseReader, original_image
 
 
@@ -103,6 +103,8 @@ def main(argv=None):
                 count += 1
             print(canonical({"enqueued_or_existing": count}))
         elif args.action == "run":
+            if not args.logo and not args.logo_sha256:
+                args.logo, args.logo_sha256 = default_brand()
             print(canonical({"task": process_one(store, args.logo, args.logo_sha256, original_image)}))
         elif args.action in ("status", "notifications"):
             query = ("SELECT id,state,attempts,reason,result_hash,updated FROM tasks ORDER BY id" if args.action == "status"

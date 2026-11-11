@@ -15,6 +15,13 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).parent
 
 
+def default_brand():
+    root = ROOT.parent / 'assets' / 'brand'
+    manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+    asset = manifest['variants'][manifest['default']]
+    return root / asset['file'], asset['sha256']
+
+
 class Blocked(Exception):
     pass
 
@@ -266,7 +273,7 @@ def render(draft, logo, product):
     text = "".join(f'<tspan x="60" dy="42">{esc(line)}</tspan>' for line in lines[:7])
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1350" viewBox="0 0 1080 1350">
 <rect width="1080" height="1350" fill="#080808"/>
-<image href="{logo}" x="720" y="20" width="320" height="170"/>
+<image href="{logo}" x="60" y="20" width="640" height="170" preserveAspectRatio="xMinYMid meet"/>
 <rect x="60" y="200" width="960" height="590" fill="white"/>
 <image href="{product}" x="70" y="210" width="940" height="570" preserveAspectRatio="xMidYMid meet"/>
 <text y="820" fill="#fff5e2" font-size="34" font-family="Arial">{text}</text>

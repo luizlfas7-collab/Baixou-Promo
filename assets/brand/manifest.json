@@ -1,0 +1,17 @@
+{
+  "default": "horizontal",
+  "variants": {
+    "horizontal": {
+      "file": "logo-horizontal-colorida-transparente.png",
+      "sha256": "28e0ed521f695640ee1cc07af64c571581fb7c03386e9c9187e9bc7d890cbdd2"
+    },
+    "profile": {
+      "file": "perfil-com-nome-1080.jpg",
+      "sha256": "adae7a33e8575b68ef6e25b7df04118c93de9c5a44d00b6200b81ed546953657"
+    },
+    "symbol": {
+      "file": "perfil-simbolo-1080.png",
+      "sha256": "9377f44621074c5f7aee0d376f5d0ce6c5f0d6fd697cebdb19014d92fe3c2c99"
+    }
+  }
+}
