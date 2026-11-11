@@ -1,5 +1,5 @@
 import { ehLinkDeAfiliado } from "./afiliados.ts"
-import { LINHA_DE_PUBLICIDADE, type Botao, type PayloadTelegram } from "./payload.ts"
+import { ehLinhaDePublicidade, type Botao, type PayloadTelegram } from "./payload.ts"
 
 /**
  * Converte o post do Telegram na versao que se cola num canal do WhatsApp.
@@ -129,8 +129,10 @@ export function montarRepasseWhatsapp(payload: PayloadTelegram): ResultadoRepass
   // A linha de publicidade e exigencia legal e vale nos dois canais. Ela ja
   // vem no texto do Telegram; o link entra ANTES dela para que o aviso continue
   // sendo a ultima coisa que o leitor ve.
+  // Aceita o formato novo (#publi) e o antigo: post publicado antes de 11/11
+  // tem o bloco velho no snapshot e continua em regra. Ver AVISOS_ACEITOS.
   const linhas = corpo.split("\n")
-  const ondeEstaOAviso = linhas.findIndex((l) => l.trim() === LINHA_DE_PUBLICIDADE)
+  const ondeEstaOAviso = linhas.findIndex((l) => ehLinhaDePublicidade(l.trim()))
 
   if (ondeEstaOAviso === -1) {
     return { ok: false, motivo: "sem_linha_de_publicidade" }
