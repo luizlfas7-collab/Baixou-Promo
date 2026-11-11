@@ -2,6 +2,88 @@ const ENDERECO_TOKEN = "https://api.mercadolibre.com/oauth/token"
 const ENDERECO_API = "https://api.mercadolibre.com"
 const TEMPO_LIMITE_MS = 12_000
 
+/**
+ * Retentativa com recuo, so para o que e transitorio.
+ *
+ * O que ela conserta: uma falha de rede ou um 429 perdia a leitura daquele
+ * item e ele so voltava na revisita seguinte, ~1h depois. Com a watchlist em
+ * 320 e ~300 leituras/h, cada leitura perdida e uma hora de cegueira naquele
+ * produto — e queda relampago mora exatamente nesse intervalo.
+ *
+ * O que ela NAO faz: repetir 404, 401 ou 403. Esses sao definitivos; repetir
+ * so gasta janela e bate mais na API de quem ja disse nao.
+ *
+ * O TETO E POR RODADA, e essa e a parte que importa. Sem teto, dois itens com
+ * timeout de 12s consumiriam 3 tentativas cada e a rodada passaria dos 120s do
+ * cron — a retentativa teria trocado "perde uma leitura" por "perde a rodada
+ * inteira".
+ *
+ * E o orcamento conta o TEMPO DA TENTATIVA, nao so o sono. Contar so o sono
+ * seria uma conta que nao fecha: o sono e de milissegundos e o timeout e de
+ * 12 SEGUNDOS, entao o gasto real mora na tentativa. Por isso so se retenta
+ * quando o PIOR CASO da proxima tentativa (sono + timeout) ainda cabe no que
+ * sobrou. Pior caso da rodada inteira: ~7s de trabalho + ~13s de retentativa.
+ */
+const MAX_TENTATIVAS = 3
+const ORCAMENTO_DE_ESPERA_MS = 20_000
+const RECUO_BASE_MS = 400
+const RECUO_BASE_LIMITE_DE_TAXA_MS = 1_000
+/** Retry-After absurdo nao pode sequestrar a rodada. */
+const ESPERA_MAXIMA_MS = 8_000
+
+let orcamentoRestanteMs = 0
+
+/**
+ * Zera o orcamento no comeco de cada rodada.
+ *
+ * O isolate do Deno pode ser reaproveitado entre invocacoes, entao o estado de
+ * modulo sobrevive: sem este reset a segunda rodada herdaria o orcamento gasto
+ * pela primeira e nao retentaria nada.
+ */
+export function iniciarOrcamentoDeRetentativa(ms: number = ORCAMENTO_DE_ESPERA_MS): void {
+  orcamentoRestanteMs = ms
+}
+
+/** Quanto ja se gastou esperando nesta rodada. Vai para os metadados. */
+export function esperaGastaMs(): number {
+  return Math.max(0, ORCAMENTO_DE_ESPERA_MS - orcamentoRestanteMs)
+}
+
+/**
+ * Ha espaco para mais uma tentativa?
+ *
+ * Reserva o pior caso — o sono MAIS um timeout cheio — antes de autorizar.
+ * Autorizar so pelo sono deixaria a tentativa seguinte estourar a janela.
+ */
+function cabeOutraTentativa(esperaMs: number): boolean {
+  return esperaMs + TEMPO_LIMITE_MS <= orcamentoRestanteMs
+}
+
+/** Desconta o que a tentativa REALMENTE custou, sono incluido. */
+function descontarDoOrcamento(ms: number): void {
+  orcamentoRestanteMs = Math.max(0, orcamentoRestanteMs - ms)
+}
+
+function dormir(ms: number): Promise<void> {
+  return new Promise((resolver) => setTimeout(resolver, ms))
+}
+
+/**
+ * Recuo exponencial com tremor. O tremor evita que os 10 itens da rodada, ao
+ * baterem no mesmo 429, voltem todos no mesmo milissegundo.
+ */
+function esperaDaTentativa(tentativa: number, erro: ErroMercadoLivre): number {
+  if (erro.esperarSegundos !== null) {
+    return Math.min(erro.esperarSegundos * 1000, ESPERA_MAXIMA_MS)
+  }
+  const base = erro.codigo === "limite_de_taxa"
+    ? RECUO_BASE_LIMITE_DE_TAXA_MS
+    : RECUO_BASE_MS
+  const recuo = base * Math.pow(3, tentativa - 1)
+  const tremor = recuo * (0.75 + Math.random() * 0.5)
+  return Math.min(Math.round(tremor), ESPERA_MAXIMA_MS)
+}
+
 export type Credenciais = {
   client_id: string
   client_secret: string
@@ -46,12 +128,20 @@ export type ReputacaoVendedor = {
 export class ErroMercadoLivre extends Error {
   readonly codigo: string
   readonly retentavel: boolean
+  /** Do cabecalho Retry-After, quando o ML diz quanto esperar. */
+  readonly esperarSegundos: number | null
 
-  constructor(mensagem: string, codigo: string, retentavel = false) {
+  constructor(
+    mensagem: string,
+    codigo: string,
+    retentavel = false,
+    esperarSegundos: number | null = null,
+  ) {
     super(mensagem)
     this.name = "ErroMercadoLivre"
     this.codigo = codigo
     this.retentavel = retentavel
+    this.esperarSegundos = esperarSegundos
   }
 }
 
@@ -127,7 +217,15 @@ export async function renovarTokens(credenciais: Credenciais): Promise<TokensRen
   }
 }
 
-async function buscar(caminho: string, accessToken: string): Promise<unknown> {
+/** Segundos do cabecalho Retry-After, quando vier em formato numerico. */
+function lerRetryAfter(resposta: Response): number | null {
+  const bruto = resposta.headers.get("retry-after")
+  if (!bruto) return null
+  const segundos = Number(bruto)
+  return Number.isFinite(segundos) && segundos >= 0 ? segundos : null
+}
+
+async function buscarUmaVez(caminho: string, accessToken: string): Promise<unknown> {
   const resposta = await comTempoLimite(`${ENDERECO_API}${caminho}`, {
     method: "GET",
     headers: {
@@ -148,7 +246,12 @@ async function buscar(caminho: string, accessToken: string): Promise<unknown> {
   }
 
   if (resposta.status === 429) {
-    throw new ErroMercadoLivre("Limite de taxa do Mercado Livre", "limite_de_taxa", true)
+    throw new ErroMercadoLivre(
+      "Limite de taxa do Mercado Livre",
+      "limite_de_taxa",
+      true,
+      lerRetryAfter(resposta),
+    )
   }
 
   if (resposta.status >= 500) {
@@ -164,6 +267,47 @@ async function buscar(caminho: string, accessToken: string): Promise<unknown> {
   } catch {
     throw new ErroMercadoLivre(`Resposta ilegivel em ${caminho}`, "resposta_ilegivel", true)
   }
+}
+
+/**
+ * Le a API do ML repetindo so o que e transitorio, dentro do orcamento da
+ * rodada. Erro definitivo sobe na primeira tentativa, como antes.
+ */
+async function buscar(caminho: string, accessToken: string): Promise<unknown> {
+  let ultimoErro: ErroMercadoLivre | null = null
+
+  for (let tentativa = 1; tentativa <= MAX_TENTATIVAS; tentativa += 1) {
+    // A primeira tentativa e a leitura normal e nao consome orcamento: o
+    // orcamento paga o que a retentativa ACRESCENTA.
+    const comecou = Date.now()
+
+    try {
+      const resultado = await buscarUmaVez(caminho, accessToken)
+      if (tentativa > 1) descontarDoOrcamento(Date.now() - comecou)
+      return resultado
+    } catch (erro) {
+      if (tentativa > 1) descontarDoOrcamento(Date.now() - comecou)
+      if (!(erro instanceof ErroMercadoLivre) || !erro.retentavel) throw erro
+
+      ultimoErro = erro
+      if (tentativa === MAX_TENTATIVAS) break
+
+      const espera = esperaDaTentativa(tentativa, erro)
+      // Sem espaco para o pior caso da proxima: desistir agora e melhor que
+      // estourar a rodada.
+      if (!cabeOutraTentativa(espera)) break
+
+      descontarDoOrcamento(espera)
+      await dormir(espera)
+    }
+  }
+
+  // O laco so chega aqui depois de pelo menos uma falha retentavel, entao
+  // `ultimoErro` esta preenchido. A guarda existe para que um refactor futuro
+  // que mexa no laco nao acabe lancando null — erro sem mensagem e pior que o
+  // erro original.
+  throw ultimoErro ??
+    new ErroMercadoLivre(`Falha sem diagnostico em ${caminho}`, "sem_diagnostico", true)
 }
 
 function numeroOuNulo(valor: unknown): number | null {
