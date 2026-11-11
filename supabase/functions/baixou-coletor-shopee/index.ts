@@ -424,10 +424,31 @@ Deno.serve(async (requisicao: Request) => {
     // por que, nem a que distancia do corte. Mesmo defeito que custou tres
     // dias no coletor do ML.
     const recusasPorNota: Record<string, number> = {}
+    // Falha de CHAMADA nao e recusa de PRODUTO, e misturar as duas custou seis
+    // dias. Entre 05 e 11/11 a Shopee passou a devolver "error [10000]: System
+    // Error" em metade das palavras; essas falhas caem em `detalhes` sem
+    // `motivo` nem `situacao`, entao viravam "sem_motivo" nesta conta — e o
+    // boletim relatava "produto recusado sem explicacao" quando a verdade era
+    // "a busca nem aconteceu". O coletor do ML ja rotulava por `etapa`; este
+    // nao, e a divergencia entre as duas implementacoes foi o defeito.
+    //
+    // O CODIGO tambem passa a ser gravado. Sem ele nao se distingue limite de
+    // taxa, assinatura invalida, credencial vencida e instabilidade da Shopee —
+    // quatro remedios diferentes para o mesmo numero. Diagnosticar isso exigiu
+    // criar ensaio_coletor_shopee() e ler a resposta HTTP na mao.
+    const codigosDeFalha: Record<string, number> = {}
     let pontuacaoMaxima: number | null = null
     let quaseAprovou: Record<string, unknown> | null = null
 
     for (const detalhe of resumo.detalhes) {
+      if (typeof detalhe.etapa === "string") {
+        const rotulo = `falha_${detalhe.etapa}`
+        recusasPorNota[rotulo] = (recusasPorNota[rotulo] ?? 0) + 1
+        const codigo = typeof detalhe.codigo === "string" ? detalhe.codigo : "sem_codigo"
+        codigosDeFalha[codigo] = (codigosDeFalha[codigo] ?? 0) + 1
+        continue
+      }
+
       const motivo = typeof detalhe.motivo === "string"
         ? detalhe.motivo
         : typeof detalhe.situacao === "string"
@@ -453,7 +474,18 @@ Deno.serve(async (requisicao: Request) => {
       }
     }
 
+    // Rodada de ensaio tem que ser RECONHECIVEL no banco. O coletor do ML
+    // grava isso desde sempre; este nao gravava, e a consequencia apareceu em
+    // 11/11: tres ensaios de diagnostico inflaram vistos_1h de ~900 para 1500
+    // e empurraram a razao de leitura de 0,39 para 0,65, justamente acima do
+    // corte de 0,60 — ou seja, o ato de diagnosticar o problema escondeu o
+    // problema do alarme. Medicao que o proprio diagnostico altera nao serve.
+    metadadosFinais.ensaio = ensaio
     metadadosFinais.recusas_por_nota = recusasPorNota
+    // Vazio quando a rodada foi limpa; com conteudo, e a primeira coisa a ler.
+    if (Object.keys(codigosDeFalha).length > 0) {
+      metadadosFinais.codigos_de_falha = codigosDeFalha
+    }
     // O numero que decide se o corte vale calibragem: 87 pede uma conversa,
     // 40 significa que o corte nem e o obstaculo e mexer nele seria encher o
     // canal de preco normal disfarcado de promocao.
@@ -490,6 +522,7 @@ Deno.serve(async (requisicao: Request) => {
       recusados: resumo.recusados,
       falhas: resumo.falhas,
       recusas: recusasPorFiltro,
+      pontuacao_maxima: pontuacaoMaxima,
     }))
 
     return responder(200, { ...resumo, ensaio, recusas_por_filtro: recusasPorFiltro })

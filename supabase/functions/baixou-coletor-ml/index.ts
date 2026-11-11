@@ -603,7 +603,17 @@ Deno.serve(async (requisicao: Request) => {
           await supabase.rpc("ml_item_falhou", { p_id: observado.id, p_motivo: mensagem })
         }
         resumo.falhas += 1
-        resumo.detalhes.push({ item: observado.item_id ?? observado.produto_catalogo, etapa: "ler", erro: mensagem })
+        // O codigo vai junto da mensagem. Do lado da Shopee, a falta dele fez
+        // "error [10000]: System Error" passar seis dias (05 a 11/11) parecendo
+        // recusa de produto: sem codigo nao se separa limite de taxa de
+        // credencial vencida ou de instabilidade da fonte.
+        const codigo = erro instanceof ErroMercadoLivre ? erro.codigo : "desconhecido"
+        resumo.detalhes.push({
+          item: observado.item_id ?? observado.produto_catalogo,
+          etapa: "ler",
+          codigo,
+          erro: mensagem,
+        })
         continue
       }
 
@@ -642,6 +652,7 @@ Deno.serve(async (requisicao: Request) => {
     // silencio que impediu o diagnostico. O que a rodada descobre, a rodada
     // registra.
     const recusasPorMotivo: Record<string, number> = {}
+    const codigosDeFalha: Record<string, number> = {}
     let pontuacaoMaxima: number | null = null
     let quaseAprovou: Record<string, unknown> | null = null
 
@@ -652,6 +663,11 @@ Deno.serve(async (requisicao: Request) => {
           ? `falha_${detalhe.etapa}`
           : "sem_motivo"
       recusasPorMotivo[motivo] = (recusasPorMotivo[motivo] ?? 0) + 1
+
+      if (typeof detalhe.etapa === "string") {
+        const codigo = typeof detalhe.codigo === "string" ? detalhe.codigo : "sem_codigo"
+        codigosDeFalha[codigo] = (codigosDeFalha[codigo] ?? 0) + 1
+      }
 
       // So quem foi barrado PELA NOTA entra nesta conta. Item recusado por
       // vantagem ou por vendedor pode ter nota alta sem significar nada — se
@@ -673,6 +689,10 @@ Deno.serve(async (requisicao: Request) => {
     }
 
     metadadosFinais.recusas_por_motivo = recusasPorMotivo
+    // Vazio quando a rodada foi limpa; com conteudo, e a primeira coisa a ler.
+    if (Object.keys(codigosDeFalha).length > 0) {
+      metadadosFinais.codigos_de_falha = codigosDeFalha
+    }
     // A nota mais alta da rodada diz se o corte esta perto ou longe: 87 pede
     // calibragem, 40 significa que o corte nem e o problema. Com os
     // componentes abertos do item que chegou mais perto, da para ver QUAL
