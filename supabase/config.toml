@@ -1,0 +1,10 @@
+project_id = "xxskmxhpzbqzxoaffiul"
+
+[functions.baixou-instagram-auth-test]
+verify_jwt = true
+
+[functions.baixou-instagram-container-test]
+verify_jwt = true
+
+[functions.baixou-instagram-launch-once]
+verify_jwt = true

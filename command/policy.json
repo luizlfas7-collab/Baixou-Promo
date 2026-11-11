@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "project": "xxskmxhpzbqzxoaffiul",
+  "max_age_seconds": 1800,
+  "telegram_max_age_seconds": 86400,
+  "history_window_seconds": 2592000,
+  "max_attempts": 3,
+  "lease_seconds": 120,
+  "automatic_actions": ["read_offers", "prepare_local_draft"],
+  "approval_required": ["handoff_draft", "publish_instagram", "send_notification", "deploy", "change_secrets", "change_schedule"],
+  "disabled_actions": ["publish_instagram", "send_notification", "deploy", "change_secrets", "change_schedule"],
+  "affiliate_hosts": ["meli.la", "s.shopee.com.br", "tidd.ly", "amzn.to"],
+  "image_hosts": ["cf.shopee.com.br", "down-br.img.susercontent.com", "http2.mlstatic.com", "images-na.ssl-images-amazon.com", "m.media-amazon.com", "images.kabum.com.br"]
+}

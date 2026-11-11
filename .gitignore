@@ -5,3 +5,6 @@ dist/
 .DS_Store
 supabase/.temp/
 supabase/.branches/
+.kaiydo/
+__pycache__/
+*.pyc

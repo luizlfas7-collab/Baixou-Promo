@@ -1,5 +1,9 @@
 # Baixou
 
+KAIYDO COMMAND, preparação local com autonomia controlada:
+[execução no Windows, políticas e implantação](docs/kaiydo-command.md).
+Publicação e mensagens externas desabilitadas nesta primeira versão.
+
 Automação que observa preços de marketplace, pontua o que caiu de verdade e
 publica no canal do Telegram [`@aixou_promocoes`](https://t.me/aixou_promocoes).
 Projeto antes chamado **Sintonia**.
