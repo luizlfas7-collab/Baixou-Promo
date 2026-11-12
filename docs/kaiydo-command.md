@@ -1,5 +1,41 @@
 # KAIYDO COMMAND — primeira versão mínima
 
+## Atualização de 11/11/2026: ciclo completo de preparação
+
+Novo comando único: `python -m command.cli cycle --limit 1 --out .kaiydo/review`.
+Instale antes as dependências fixadas com
+`python -m pip install -r command/requirements.txt`.
+O ciclo consulta candidatos via adaptador de leitura, valida, ordena pela queda
+observada e prepara até o limite indicado. O padrão é **uma arte por execução**,
+com **queda mínima de 10% para preparação**, sem habilitar publicação.
+Esse corte organiza a revisão local; não é autorização de postagem nem uma
+política de frequência aprovada para produção.
+
+Agora são gerados automaticamente JPEG 1080×1350, SVG, legenda e `review.json`,
+com hashes dos arquivos, validade e estado `awaiting_review`. O pacote fica em
+`<pasta>/<tarefa>/<hash-do-artefato>/`. Repetir um ciclo reutiliza o pacote íntegro,
+sem repetir download ou render. Pacote modificado é bloqueado. Oferta repetida
+na mesma consulta ocupa apenas uma posição. Preparação escolhida não drena
+tarefas não relacionadas da fila.
+
+A identificação comercial saiu do rodapé da **nova arte local**, permanecendo
+na legenda como `Publicidade • link de afiliado`. O worker Telegram não mudou.
+O script Windows executa esse ciclo único por padrão. `-NoSync` mantém o modo
+anterior de processar a fila existente. Nenhuma execução contínua ou agendamento
+foi instalado. O comando online requer a credencial de leitura já documentada.
+
+Validação: 24 testes Python e 20 testes Instagram existentes passaram. Um ciclo
+com 12 ofertas reais obtidas via consulta Supabase somente leitura gerou um
+pacote JPEG local da oferta 2109376 e registrou os bloqueios das demais. Essa
+execução usou o conector para obter evidências; a mesma função de ciclo recebe
+normalmente os dados do adaptador REST. A credencial REST do Windows ainda não
+foi configurada/testada nesta sessão. O render foi conferido visualmente.
+
+Pendências para postagem: hospedagem imutável do JPEG, integração de escrita de
+rascunho testada em ambiente isolado, aprovação das regras de conta/frequência,
+publicador habilitado sob aprovação e implantação autorizada. Nada foi publicado.
+As seções abaixo descrevem também as etapas anteriores do MVP.
+
 ## Entrega e limite operacional
 
 Esta versão executa **preparação local**, com fila durável SQLite, leitura Supabase,

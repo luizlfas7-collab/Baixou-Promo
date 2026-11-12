@@ -138,9 +138,9 @@ def validate(data, now=None):
             "desconto_percentual": str(discount), "url_afiliado": o["url_afiliado"],
             "imagem_original_url": o["url_imagem"], "hash_conteudo_oferta": o["hash_conteudo"],
             "historico_anterior_id": before["id"], "historico_atual_id": history[-1]["id"],
-            "legenda": f'{o["titulo"]}\nPreço anterior observado: R$ {original:.2f}\n'
-            f'Agora: R$ {current:.2f}\n{discount}% de queda sobre o preço observado.\n'
-            f'{o["url_afiliado"]}\nPUBLICIDADE • LINK DE AFILIADO\nPreço e estoque sujeitos a alteração.'}
+            "legenda": f'{o["titulo"]}\nPreço anterior observado: R$ ' + format(original, '.2f').replace('.', ',')
+            + '\nAgora: R$ ' + format(current, '.2f').replace('.', ',') + f'\n{discount}% de queda sobre o preço observado.\n'
+            + f'{o["url_afiliado"]}\nPublicidade • link de afiliado\nPreço e estoque sujeitos a alteração.'}
 
 
 class Store:
@@ -210,7 +210,7 @@ class Store:
             self.event(row.lastrowid, "enqueued", {})
             return row.lastrowid
 
-    def claim(self):
+    def claim(self, task=None):
         now = time.time()
         with self.tx():
             expired = self.db.execute("SELECT id,attempts FROM tasks WHERE state='running' AND lease<?", (now,)).fetchall()
@@ -218,7 +218,7 @@ class Store:
                 state = "failed" if row["attempts"] >= policy()["max_attempts"] else "queued"
                 self.db.execute("UPDATE tasks SET state=?,token=NULL,lease=NULL,reason='lease_expired' WHERE id=?", (state, row["id"]))
                 self.event(row["id"], "lease_expired", {}, "error")
-            row = self.db.execute("SELECT * FROM tasks WHERE state='queued' ORDER BY id LIMIT 1").fetchone()
+            row = self.db.execute("SELECT * FROM tasks WHERE state='queued' AND (? IS NULL OR id=?) ORDER BY id LIMIT 1", (task, task)).fetchone()
             if not row:
                 return None
             token = uuid.uuid4().hex
@@ -290,11 +290,11 @@ def render(draft, logo, product):
 <rect x="0" y="1165" width="1080" height="185" fill="#ff7900"/>
 <text x="60" y="1210" fill="#080808" font-size="28" font-family="Arial">Anterior observado: R$ {previous_price}</text>
 <text x="60" y="1280" fill="#080808" font-size="58" font-family="Arial">Agora R$ {current_price}</text>
-<text x="60" y="1330" fill="#080808" font-size="22" font-family="Arial">PUBLICIDADE • LINK DE AFILIADO • Preço e estoque sujeitos a alteração</text></svg>'''
+<text x="60" y="1330" fill="#080808" font-size="22" font-family="Arial">Preço e estoque sujeitos a alteração • Consulte as condições na legenda</text></svg>'''
 
 
-def process_one(store, logo=None, logo_sha=None, image_loader=None):
-    row = store.claim()
+def process_one(store, logo=None, logo_sha=None, image_loader=None, task=None):
+    row = store.claim(task)
     if not row:
         return None
     try:

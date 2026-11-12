@@ -1,5 +1,6 @@
 {
-  "version": 1,
+  "version": 2,
+  "preparation_min_discount_percent": 10,
   "project": "xxskmxhpzbqzxoaffiul",
   "max_age_seconds": 1800,
   "telegram_max_age_seconds": 86400,

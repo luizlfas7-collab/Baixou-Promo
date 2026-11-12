@@ -14,8 +14,9 @@ try {
         $LogoSha256 = $brandAsset.sha256
     }
     if (-not $NoSync) {
-        python -m command.cli sync
-        if ($LASTEXITCODE -ne 0) { throw 'Falha na leitura; conferir notificações locais.' }
+        python -m command.cli cycle --limit 1
+        if ($LASTEXITCODE -ne 0) { throw 'Falha no ciclo; conferir notificações locais.' }
+        return
     }
     # Limited local preparation only. Never calls a publisher or exports approved SQL.
     for ($iteration = 0; $iteration -lt 20; $iteration++) {

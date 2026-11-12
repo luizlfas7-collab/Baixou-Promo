@@ -77,6 +77,9 @@ def main(argv=None):
     parser.add_argument("--db", default=".kaiydo/state.db")
     commands = parser.add_subparsers(dest="action", required=True)
     commands.add_parser("sync", help="Ler ofertas Supabase e enfileirar localmente")
+    batch = commands.add_parser('cycle', help='Selecionar ofertas e gerar JPEG + legenda locais')
+    batch.add_argument('--out', default='.kaiydo/review')
+    batch.add_argument('--limit', type=int, default=1)
     run = commands.add_parser("run", help="Processar uma tarefa local")
     run.add_argument("--logo")
     run.add_argument("--logo-sha256")
@@ -96,7 +99,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     store = Store(args.db)
     try:
-        if args.action == "sync":
+        if args.action == 'cycle':
+            from .pipeline import cycle
+            print(canonical(cycle(store, SupabaseReader().candidates(), args.out, args.limit)))
+        elif args.action == "sync":
             count = 0
             for evidence in SupabaseReader().candidates():
                 store.enqueue(evidence)
