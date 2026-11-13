@@ -2,6 +2,7 @@
 import argparse
 import base64
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -85,6 +86,7 @@ def main(argv=None):
     run.add_argument("--logo-sha256")
     commands.add_parser("status")
     commands.add_parser("notifications")
+    commands.add_parser('story-readiness', help='Conferir configuração local, sem conexão ou publicação')
     export = commands.add_parser("export")
     export.add_argument("task", type=int)
     export.add_argument("--out", required=True)
@@ -99,7 +101,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     store = Store(args.db)
     try:
-        if args.action == 'cycle':
+        if args.action == 'story-readiness':
+            from .stories import readiness
+            print(canonical(readiness(os.environ)))
+        elif args.action == 'cycle':
             from .pipeline import cycle
             print(canonical(cycle(store, SupabaseReader().candidates(), args.out, args.limit)))
         elif args.action == "sync":

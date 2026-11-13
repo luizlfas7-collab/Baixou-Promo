@@ -1,5 +1,57 @@
 # KAIYDO COMMAND — primeira versão mínima
 
+## Stories com link: implementação de 12/11/2026
+
+O mesmo `cycle` agora produz feed **e** Story 1080×1920 para a oferta escolhida.
+O pacote inclui `story.jpg` (fundo sem figurinha), `story-preview.jpg` (simulação
+visual da figurinha), `story.svg`, `story.html` e `story.json`. O link em
+`story.json` e no componente nativo `<insta-link>` é exatamente o afiliado da
+oferta validada. A imagem original e a logo são preservadas. Conteúdo importante
+fica entre y=250 e y=1600, fora das áreas principais da interface Instagram.
+
+**O JPEG não possui link clicável.** O botão da prévia é apenas uma simulação;
+a figurinha real depende do provedor e precisa ser conferida após integração.
+O HTML é um modelo local de Story Components, não um pedido enviado à API nem
+uma comprovação de que o provedor aceitou a mídia. O layout e a extração da
+figurinha ainda precisam de teste autorizado no Storrito. Todos os arquivos
+fazem parte da checagem de integridade do pacote.
+
+Verificação local sem conexão: `python -m command.cli story-readiness`.
+Os campos esperados são `KAIYDO_STORRITO_ORIGIN` (origem HTTPS da organização),
+`KAIYDO_STORRITO_TOKEN` (credencial de API) e `KAIYDO_INSTAGRAM_USERNAME`.
+O diagnóstico informa somente presença/validade de formato; nunca imprime
+valores e nunca afirma que a conexão está funcionando. Nesta sessão os três
+campos não estavam configurados no ambiente local.
+
+Os códigos remotos de `baixou-storrito-auth-test`, `baixou-storrito-draft-once`
+e `baixou-storrito-publish-once` foram inspecionados: endpoints de teste encerrados,
+HTTP 410. Isso não informa a situação atual da assinatura ou da conta no Storrito.
+Não foram invocados, reativados ou modificados. Somente nomes de duas autorizações
+antigas de teste foram consultados no Vault; nenhum valor de segredo foi lido.
+
+A API atual documenta `schedule-instagram-story` com `html`, `instagramUsername`
+e `storyPostUuid`, e figurinha `insta-link` com `url` e `text`. Não existe chamada
+segura de "rascunho" implementada aqui: agendar pode resultar em publicação.
+Nenhuma chamada Storrito foi feita. Não enviar `story.html` automaticamente.
+Futura integração exige autorização, conta confirmada, prazo, idempotência
+durável, checagem de warnings e reconciliação de resultado incerto. Aprovação
+de encaminhar rascunho do feed não autoriza Story ou agendamento.
+
+Para concluir: verificar conta/assinatura, configurar a credencial em ambiente
+seguro com consentimento (nunca no chat), testar extração/posição da figurinha
+e só então autorizar uma publicação supervisionada. O provedor informa que usa
+uma conexão própria ao Instagram, além da API oficial da Meta; o operador deve
+aprovar essa conexão. Alternativa inicial: publicar a arte manualmente no app
+Instagram e adicionar o link de `story.json` pela figurinha nativa.
+
+29 testes Python passaram. Uma oferta real atual, 1073810, foi validada e gerou
+os dois formatos localmente; a prévia do Story foi conferida visualmente. Isso
+não comprova capacidade/estoque de checkout nem disponibilidade futura.
+
+Referências consultadas:
+- [API e Story Components do Storrito](https://storrito.com/documentation/api/v1/)
+- [Como o Storrito conecta ao Instagram](https://storrito.com/help-center/how-does-storrito-integrate-with-instagram/)
+
 ## Atualização de 11/11/2026: ciclo completo de preparação
 
 Novo comando único: `python -m command.cli cycle --limit 1 --out .kaiydo/review`.

@@ -17,7 +17,7 @@ def jpeg_bytes(svg):
         raise Blocked('renderer_not_installed') from None
     png = resvg_py.svg_to_bytes(svg_string=svg)
     image = Image.open(io.BytesIO(png)).convert('RGB')
-    if image.size != (1080, 1350):
+    if image.size not in {(1080, 1350), (1080, 1920)}:
         raise Blocked('unexpected_image_size')
     target = io.BytesIO()
     image.save(target, format='JPEG', quality=95, subsampling=0)
@@ -31,14 +31,17 @@ def export_bundle(store, task, root, renderer=jpeg_bytes):
     result = json.loads(row['result'])
     if result['valid_until'] <= time.time() or result['policy_hash'] != digest(policy()):
         raise Blocked('artifact_expired_or_policy_changed')
-    folder = Path(root).resolve() / str(task) / row['result_hash']
+    folder = Path(root).resolve() / str(task) / (row['result_hash'] + '-feed-story-v1')
     manifest_file = folder / 'review.json'
     if manifest_file.exists():
         old = json.loads(manifest_file.read_text(encoding='utf-8'))
         if old.get('artifact_hash') != row['result_hash']:
             raise Blocked('export_integrity_failed')
+        required = {'oferta.jpg', 'preview.svg', 'legenda.txt', 'story.jpg', 'story-preview.jpg', 'story.svg', 'story.html', 'story.json'}
+        if set(old['files']) != required:
+            raise Blocked('bundle_upgrade_requires_regeneration')
         for name, sha in old['files'].items():
-            if name not in {'oferta.jpg', 'preview.svg', 'legenda.txt'}:
+            if name not in required:
                 raise Blocked('export_integrity_failed')
             if hashlib.sha256((folder/name).read_bytes()).hexdigest() != sha:
                 raise Blocked('export_integrity_failed')
@@ -48,6 +51,18 @@ def export_bundle(store, task, root, renderer=jpeg_bytes):
         raise Blocked('renderer_invalid_jpeg')
     files = {'oferta.jpg': raw, 'preview.svg': result['svg'].encode(),
              'legenda.txt': result['draft']['legenda'].encode()}
+    from .stories import story_svg, handoff
+    vertical = story_svg(result)
+    story_jpeg = renderer(vertical)
+    preview_jpeg = renderer(story_svg(result, preview=True))
+    if not story_jpeg.startswith(b'\xff\xd8\xff') or not preview_jpeg.startswith(b'\xff\xd8\xff'):
+        raise Blocked('renderer_invalid_story_jpeg')
+    markup, contract = handoff(result, story_jpeg)
+    files.update({'story.jpg': story_jpeg, 'story-preview.jpg': preview_jpeg,
+                  'story.svg': vertical.encode(), 'story.html': markup.encode(),
+                  'story.json': canonical(contract).encode()})
+    if result['valid_until'] <= time.time():
+        raise Blocked('artifact_expired_during_render')
     review = {'task': task, 'artifact_hash': row['result_hash'], 'offer': result['draft']['oferta_id'],
               'valid_until': result['valid_until'], 'state': 'awaiting_review', 'published': False,
               'files': {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}
