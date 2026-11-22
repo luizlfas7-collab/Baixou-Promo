@@ -158,3 +158,66 @@ de saude no boletim, recuo conservador em falha e jitter no horario.
 
 `alarme_entrega` e `ofertas_perdidas` rodam dentro do Postgres e aparecem no
 boletim. A sessao nao precisa acordar de 2 em 2 horas para que eles funcionem.
+
+## Incidente 20 a 22/11: uma foto ruim congelou o canal por 61h30
+
+O defeito mais caro ate hoje, e o mais silencioso. Fica aqui inteiro porque a
+forma dele vai se repetir.
+
+O QUE ACONTECEU, na ordem:
+
+  20/11 14:53  Oferta 176405 entra na fila (id 845).
+  20/11 14:55  Worker reserva, despacha, e o Telegram responde
+               `400 Bad Request: failed to get HTTP URL content`
+               — ele nao conseguiu BAIXAR a foto do produto.
+  20/11 14:55  O item vai para `descartada` com ultimo_erro_codigo
+               `resultado_desconhecido`, e o banco poe o DESTINO em
+               quarentena: estado_destino.quarentena_em preenchido e
+               reservado_ate = 'infinity'.
+  20/11 17:56  Comeca a sangria. Ofertas aprovadas entram na fila e NUNCA sao
+  a 22/11      reservadas (reservada_em nulo, tentativas 0), porque
+               reservado_ate='infinity' impede qualquer reserva. Cada uma
+               vence em ~65 min. Pelo menos 9 ofertas de nota 95 a 100
+               perdidas assim.
+  22/11 16:13  reconciliar_destino('telegram','@aixou_promocoes',
+               'nao_entregue') solta a quarentena.
+  22/11 16:15  Primeira publicacao em 61h30.
+
+POR QUE NINGUEM VIU:
+
+  1. O worker continuou rodando a cada 2 minutos e devolvendo `succeeded`.
+     Visto de fora, motor saudavel.
+  2. saude_por_fonte seguiu 'saudavel' nas duas fontes — e com razao: a COLETA
+     estava perfeita. O problema era na ENTREGA, do outro lado da barra.
+  3. O vigia do banco roda a cada 30 min, tem voz, e NAO tem regra para
+     `destino_em_quarentena`. Canal congelado e a falha mais cara que existe
+     aqui e e justamente a que nao acorda ninguem.
+  4. O boletim mostrou publicou_24h caindo de 18 para 2, mas sem o alarme a
+     queda so apareceu na leitura seguinte, 12h depois.
+
+O DIAGNOSTICO SO FOI POSSIVEL porque a linha da fila guarda reservada_em,
+despacho_iniciado_em e ultimo_erro_codigo. Item `cancelada` com
+reservada_em NULO e tentativas 0 significa "o worker nunca chegou nele" — e
+isso aponta direto para a reserva, nao para o envio. Sem esses tres campos o
+diagnostico seria adivinhacao.
+
+DOIS CONSERTOS, nenhum aplicado ainda:
+
+  A) 4xx NAO E DESFECHO DESCONHECIDO. Um 400 do Telegram e recusa definitiva:
+     ele diz "nao enviei". Tratar como "nao sei se saiu" e congelar o canal e
+     desproporcional. Deve distinguir:
+       - 4xx (requisicao rejeitada, nada postado) -> marca o item falho e segue
+       - 5xx, ou rede caindo DEPOIS do envio -> ai sim quarentena
+     So o segundo caso justifica parar o canal. Com isso, uma foto ruim
+     descarta UM post em vez de matar dois dias e meio.
+     A intencao da quarentena esta certa (nao publicar duas vezes); o que
+     esta errado e a classificacao do erro.
+
+  B) O VIGIA PRECISA COBRAR QUARENTENA. Uma regra ao lado de
+     fontes_degradadas(): destino com quarentena_em preenchido por mais de
+     ~15 minutos e dinheiro parado, e tem que acordar o dono.
+
+ARMADILHA DE VERIFICACAO, paga nesta sessao: nao da para conferir o efeito de
+reconciliar_destino() na MESMA instrucao SQL que a chama. Subconsultas de um
+`select` leem o snapshot anterior ao update, entao o estado volta inalterado e
+parece que a funcao falhou. Conferir sempre em chamada separada.
