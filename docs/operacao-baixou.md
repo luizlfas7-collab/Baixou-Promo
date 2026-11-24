@@ -221,3 +221,71 @@ ARMADILHA DE VERIFICACAO, paga nesta sessao: nao da para conferir o efeito de
 reconciliar_destino() na MESMA instrucao SQL que a chama. Subconsultas de um
 `select` leem o snapshot anterior ao update, entao o estado volta inalterado e
 parece que a funcao falhou. Conferir sempre em chamada separada.
+
+## Incidente 23 a 24/11: o Mercado Livre fechou o preço, e isso quase apagou a watchlist
+
+**23/11 17:22 UTC** o ML parou de ler. Toda rodada desde então: `falhou`, com
+`recusas_por_motivo: {falha_ler: 10}`. O vigia **funcionou** e alertou às
+**17:43**, 21 minutos depois — a primeira vez que um alarme desse tipo pegou o
+problema no começo em vez de depois de dias.
+
+### Causa raiz, medida
+
+O coletor lê cada item com duas chamadas. Medido em 24/11 com
+`ensaio_get_ml()`, token saindo do cofre direto para o cabeçalho do pg_net:
+
+| endpoint | resposta |
+|---|---|
+| `GET /products/{catalogo}` | **200** — título, foto, status. `buy_box_winner` nulo, **sem preço** |
+| `GET /products/{catalogo}/items` | **403** `PA_UNAUTHORIZED_RESULT_FROM_POLICIES`, `blocked_by: PolicyAgent` |
+| `GET /products/{catalogo}/items?limit=5` | **403** idem |
+| `GET /sites/MLB/search?catalog_product_id=` | **403** `forbidden` |
+| `GET /items/{id}` | **403** `access_denied` (já era) |
+
+O token está válido — o 200 prova. **Todo endpoint que devolve preço está
+403.** É política de acesso do ML, não credencial, e não tem contorno por
+código: sem preço não existe detecção de queda de preço. Depende do painel de
+desenvolvedor do ML.
+
+### O dano colateral, que era pior que a cegueira
+
+`ml_item_falhou()` incrementa `falhas_seguidas` e **desabilita o item em 9**.
+`acesso_negado` (401/403) estava na lista das falhas não retentáveis, então
+cada 403 do ML era cobrado do item. `ml_item_observado()` zera o contador a
+cada leitura boa — logo, com o ML lendo até 17:22, todo contador estava em zero.
+
+Dezoito horas depois, às 11:45 de 24/11:
+
+- **369 habilitados, e todos os 369 com falhas acumuladas**
+- média **8,1** falhas, pior 9, corte de desabilitação **9**
+- **369 de 369 com 7 ou mais** — todos a um passo de cair
+- última `proxima_observacao_em` agendada: 24/11 **15:38**
+
+Em poucas horas a watchlist do ML estaria vazia, e quando o acesso voltasse não
+haveria o que ler. Reconstruir 369 itens com link de afiliado é trabalho manual
+do dono, item por item.
+
+### O princípio que estava escrito e não estava valendo
+
+O próprio coletor diz, sobre falha de rede: *"Falha de rede nao e culpa do
+item: nao conta contra ele."* Vale igual para 403 de política. O item não fez
+nada; a porta fechou. Punir o item por isso transforma indisponibilidade
+temporária da fonte em **perda permanente de cadastro**.
+
+Corrigido em `20261124121500`: falha de plataforma (401/403, PolicyAgent,
+limite de taxa, 5xx) só grava o motivo e espera 15 minutos. Falha **do item**
+(fora do catálogo, sem anúncio, sem preço, inativo) continua contando e
+continua desabilitando em 9, porque aí o cadastro realmente morreu. O alarme
+não foi silenciado: a rodada segue `falhou`, o veredito segue `cega`, o vigia
+segue avisando.
+
+Reparo aplicado junto: contador zerado e os itens caídos durante a janela
+devolvidos. Resultado verificado em chamada separada — 387 habilitados,
+**0 com falhas**, 0 a um passo de cair.
+
+### A lição
+
+Um guarda que pune o inocente é tão ruim quanto um guarda que não dispara.
+A pergunta que faltava em `ml_item_falhou` era a mais simples: *de quem é a
+culpa?* Toda penalidade automática a um cadastro precisa responder isso antes
+de contar.
