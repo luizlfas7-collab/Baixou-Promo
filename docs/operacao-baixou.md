@@ -289,3 +289,67 @@ Um guarda que pune o inocente é tão ruim quanto um guarda que não dispara.
 A pergunta que faltava em `ml_item_falhou` era a mais simples: *de quem é a
 culpa?* Toda penalidade automática a um cadastro precisa responder isso antes
 de contar.
+
+## 25/11: o inventário do vigia, a pedido do dono
+
+> *"Preciso sempre que meu vigia comunique qualquer falha que venha a existir
+> nesses lançamentos, ou seja, vigie 100% tudo o que está acontecendo."*
+
+Antes de ampliar, o inventário. **O vigia já cobria 11 regras:** quarentena de
+destino >15min, link suspeito em 48h, fonte cega/muda, token do ML fora de
+`pronta`/`renovando`, 24h sem publicar com fila vazia, revisita esticada, fila
+>50, fonte que lê e não entrega, fonte abaixo de 60% da âncora, aprovações
+vencidas, e grava em `erros` se ficar sem token ou sem chat.
+
+### Os buracos encontrados, e o que provou cada um
+
+**1. A tabela `erros` tinha 68 linhas não resolvidas e nada no sistema lia essa
+tabela.** O vigia *escrevia* nela e nunca *lia* dela. Entre as 68 estava
+`telegram_400` — *"Bad Request: failed to get HTTP URL content"* — gravado em
+**20/11 14:55**: a foto que congelou o canal por 61h30. **O sistema registrou a
+causa do incidente e ninguém leu.** → `erros_abertos(24)`.
+
+Os 403 do ML desta semana, por outro lado, **não estão** nessa tabela — vão
+para `itens_ml.ultimo_erro`. Nem toda falha passa por `erros`, e isso muda onde
+cada guarda tem de ficar.
+
+**2. Ninguém conferia se o aviso chegou.** Os avisos saem por `net.http_post` e
+nada olhava `net._http_response`. Conferido à mão em 25/11: status 200,
+`ok:true`, mensagens 723 e 724 no chat 8660036653 — estavam chegando. Mas o dia
+em que pararem, ninguém saberia. **Fica urgente por causa da rotação do token do
+bot:** o segredo no cofre fica velho no mesmo instante e todo envio passa a dar
+401. → `vigia_sem_voz()`, que grava em `erros` e **não** no Telegram: alarme
+sobre o canal quebrado não pode usar o canal quebrado.
+
+**3. O disco não era olhado, e o limite estava chumbado em 900 MB.** Com 1.580 MB
+no banco, o veredito era `perto_do_limite` permanente — alarme sempre aceso não
+informa nada. Limite virou coluna (`configuracoes.disco_limite_bytes`, inicial
+8 GB = disco mínimo de projeto pago). Veredito agora: `ok`, 19,28%. →
+`disco_em_risco()`.
+
+**4. Quatro formas de o motor parar sem nenhuma regra perceber:** rodada
+pendurada em `rodando` (número que **já era calculado** por `saude_da_coleta` e
+ignorado — o mesmo padrão exato do `falhas_1h` que custou seis dias em 11/11),
+agendamento do cron caído, trava de emergência esquecida ligada, e token do ML
+dizendo `pronta` com `expira_em` no passado. → `motor_travado()`.
+
+**5. A regra de degradação piscava.** Medido em 25/11: Shopee de 0,54 às 00:43
+para 0,71 às 01:28. Cada ida e volta mandava um aviso e um `NORMALIZADO`, e o
+`NORMALIZADO` não tem carência. Alarme que dispara sempre é barulho, e barulho
+faz o dono parar de ler — o oposto do pedido. Corrigido com **histerese**:
+dispara abaixo de 0,60, só se cala acima de 0,75.
+
+### O que ainda NÃO é vigiado
+
+**Versão publicada das edge functions diferente do repositório.** Hoje o repo
+tem o `#publi` e a produção não, e nada acusa. O banco não vê isso sozinho: vai
+junto com a publicação dos coletores, fazendo cada rodada gravar a própria
+versão em `metadados` para o vigia comparar.
+
+### A lição
+
+"Vigie 100%" começa por um inventário, não por regras novas. Dos cinco buracos,
+**dois eram números que o sistema já calculava e ninguém lia** — `penduradas` e
+a tabela `erros`. Guarda que não dispara é pior que guarda que dispara demais, e
+a forma mais comum dela aparecer não é falta de código: é dado medido que
+ninguém olha.
