@@ -1,17 +1,46 @@
 -- O vigia do banco tinha UMA regra de fonte: veredito in ('cega','muda') — ou
--- seja, so fonte que PAROU de ler. Fonte que perde metade da capacidade e
--- segue lendo um pouco nunca o acordava.
+-- seja, so fonte que PAROU de ler. E nao tinha regra nenhuma para destino em
+-- quarentena. Esta migracao acrescenta as duas coisas que faltavam, e nada
+-- mais: todo o resto do corpo e identico ao que estava no banco.
 --
--- MEDIDO em 11/11: a Shopee passou de 05 a 11/11 devolvendo "error [10000]:
--- System Error" em metade das palavras-chave. A leitura caiu de 57.500 para
--- 24.600 itens/dia (-57%) e o vigia — que roda a cada 30 minutos, tem o token
--- no cofre e o chat configurado, portanto TEM VOZ — passou seis dias sem nada
--- a dizer. alertas_enviados estava vazia.
+-- REGRA 1 — FONTE DEGRADADA. Fonte que perde metade da capacidade e segue
+-- lendo um pouco nunca o acordava. MEDIDO: a Shopee passou de 09 a 16/11
+-- lendo 29% a 38% do normal e o vigia, que roda a cada 30 minutos, tem o
+-- token no cofre e o chat configurado — portanto TEM VOZ — passou oito dias
+-- sem nada a dizer. Hoje, 24/11, a Shopee esta `degradada` em 0,59 outra vez
+-- e o vigia continua calado. Isso acaba aqui.
 --
--- Unica mudanca: appenda public.fontes_degradadas(), no mesmo padrao de
--- entrega_por_fonte() e aprovacoes_vencidas(). Todo o resto do corpo e
--- identico ao que estava no banco, extraido com pg_get_functiondef para nao
--- haver risco de transcricao.
+-- Esta regra so entra AGORA, e nao em 11/11 quando fontes_degradadas() foi
+-- escrita, porque a base dela era mediana movel de 7 dias: afundava junto com
+-- a queda e apagava o proprio alarme. Ligar um alarme defeituoso e pior que
+-- nao ter alarme, porque cria confianca sem cobertura. A base virou ancora
+-- fixa em 20261123234000, validada dia a dia contra 32 dias de historico.
+-- Agora a regra pode subir.
+--
+-- REGRA 2 — DESTINO EM QUARENTENA. Esta e a que doi.
+--
+-- Em 20/11 02:45 uma foto que o Telegram nao conseguiu baixar devolveu
+-- "400 Bad Request: failed to get HTTP URL content". O worker classificou
+-- como resultado_desconhecido e poz o destino em quarentena com
+-- reservado_ate = 'infinity', que bloqueia TODA reserva. O canal ficou
+-- congelado 61 HORAS E MEIA, ate 22/11 16:15. Nesse periodo pelo menos 9
+-- ofertas aprovadas com nota entre 88 e 100 entraram na fila e venceram sem
+-- nunca serem tocadas (reservada_em nulo, tentativas zero).
+--
+-- E NADA ALARMOU. A fila nao passava de 50 (a regra de fila nao pegava),
+-- publicou_24h nao era zero no comeco (a regra de silencio nao pegava), as
+-- duas fontes liam normalmente (as regras de fonte nao pegavam). Quatro
+-- guardas, todos olhando para o lado errado, porque nenhum perguntava a
+-- pergunta certa: o destino esta aceitando mensagem?
+--
+-- Quinze minutos e o limite de proposito. Quarentena legitima se resolve em
+-- segundos pela reconciliacao do proprio worker; quarentena que passa de 15
+-- minutos e dinheiro parado, nao operacao normal. Com esta regra o incidente
+-- de 20/11 teria durado 15 minutos em vez de 61 horas.
+--
+-- O texto do aviso carrega o comando da saida, porque as 3 da manha nao se
+-- lembra que soltar_trava() e OUTRO mecanismo (trava_ligada) e nao resolve
+-- quarentena nenhuma. Isso me custou tempo em 22/11.
 CREATE OR REPLACE FUNCTION public.vigia_do_motor(p_carencia_horas integer DEFAULT 6)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -84,6 +113,25 @@ begin
   -- e a regra de cegueira deste proprio vigia nunca podia disparar.
   select public.fila_pendente() into v_fila;
 
+  -- REGRA NOVA: destino que nao aceita mensagem. Primeira da lista porque e a
+  -- unica que para o canal INTEIRO: com reservado_ate = 'infinity' nenhum
+  -- item consegue ser reservado, e oferta aprovada vence sem ser tocada.
+  for r in
+    select d.canal, d.destino, d.quarentena_motivo,
+           extract(epoch from (now() - d.quarentena_em)) / 60.0 as minutos
+    from public.estado_destino d
+    where d.quarentena_em is not null
+      and d.quarentena_em < now() - interval '15 minutes'
+  loop
+    v_problemas := v_problemas || jsonb_build_object(
+      'chave', 'quarentena:' || r.canal || ':' || r.destino,
+      'texto', format(
+        'CANAL PARADO: o destino %s (%s) esta em quarentena ha %s minutos. Motivo gravado: %s. Enquanto isso NENHUM item pode ser reservado e oferta aprovada vence sem publicar. Conferir no canal se a ultima mensagem saiu e soltar com reconciliar_destino(''%s'', ''%s'', ''entregue'' ou ''nao_entregue''). soltar_trava() NAO resolve isso: e outro mecanismo.',
+        r.destino, r.canal, round(r.minutos),
+        coalesce(r.quarentena_motivo, 'nenhum'),
+        r.canal, r.destino));
+  end loop;
+
   if coalesce((v_link->>'ok')::int, 0) < coalesce((v_link->>'publicacoes')::int, 0) then
     v_problemas := v_problemas || jsonb_build_object(
       'chave', 'link',
@@ -135,9 +183,8 @@ begin
   -- Fonte que LE e nao ENTREGA. Ver entrega_por_fonte().
   v_problemas := v_problemas || public.entrega_por_fonte();
 
-  -- Fonte que ainda le, mas MUITO menos do que o normal dela. Regra que
-  -- faltava: a Shopee perdeu 57% da leitura por 6 dias e o vigia, rodando
-  -- a cada 30 min e com voz, nao tinha o que dizer.
+  -- REGRA NOVA: fonte que ainda le, mas MUITO menos do que o normal dela.
+  -- Base ancorada (ver referencia_de_leitura), nao mediana movel.
   v_problemas := v_problemas || public.fontes_degradadas();
 
   v_problemas := v_problemas || public.aprovacoes_vencidas(24);
