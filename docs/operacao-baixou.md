@@ -353,3 +353,62 @@ versão em `metadados` para o vigia comparar.
 a tabela `erros`. Guarda que não dispara é pior que guarda que dispara demais, e
 a forma mais comum dela aparecer não é falta de código: é dado medido que
 ninguém olha.
+
+## 26/11: o que é e o que não é "resolver o motor cego do ML"
+
+O dono pediu: *"Resolva esse motor cego pelo ML."* Resposta honesta: **a cegueira
+não se resolve do nosso lado.** A investigação completa, com o token saindo do
+cofre direto para o cabeçalho:
+
+| chamada | resposta |
+|---|---|
+| `GET /users/me` | **200** — token íntegro, conta reconhecida |
+| `GET /products/{catálogo}` | **200** — título, fotos, atributos, pickers |
+| `GET /products/search?site_id=MLB` | **200** — busca de catálogo |
+| `GET /highlights/MLB/category/{id}` | **200** — só ids e posições |
+| `GET /products/{catálogo}/items` | **403** `PA_UNAUTHORIZED_RESULT_FROM_POLICIES` |
+| `GET /items/{id}` | **403** `access_denied` |
+| `GET /items?ids={id}` | **403** no item do lote |
+| `GET /sites/MLB/search?q=` | **403** `forbidden` |
+| `GET /reviews/item/{id}` | **403** `forbidden` |
+
+**O mesmo token que lê `/users/me` com 200 recebe 403 em tudo que tem preço.**
+Logo não é credencial: é política sobre o **recurso**. E dentro do acesso que a
+aplicação tem não existe caminho nenhum com preço — `/products/{catálogo}`
+devolve 13,8 KB sem uma única chave `price`, `buy_box_winner` nulo, e `pickers`
+só com cor, foto e nome. Sem preço não existe detecção de queda de preço.
+
+Nota de reparo futuro: `/reviews/item/` caiu junto, ou seja `lerAvaliacao()` do
+ML também está morto. Quando o acesso voltar, conferir as duas coisas.
+
+**O que NÃO se faz:** derrubar o cabeçalho de autorização para ver se o
+endpoint público responde. O `PolicyAgent` é uma decisão da plataforma sobre
+esta aplicação; contornar isso retirando a credencial é burlar controle de
+acesso — e o custo do erro é a conta de afiliado, que é a receita inteira.
+
+**O que se faz, e foi feito:** trocar *"cego, motivo desconhecido"* por *"cego,
+HTTP 403 PA_UNAUTHORIZED, em /products/.../items, desde 23/11 17:22, conferido
+há N minutos"*, e detectar a volta sozinho em 10 minutos.
+
+`acesso_fonte` + `sondar_acesso_ml()` (cron a cada 10 min, duas fases porque
+pg_net é assíncrono) + `acesso_bloqueado()` no vigia. O alarme de acesso
+**substitui** o de motor cego para a mesma fonte: são o mesmo problema e o
+segundo contém o primeiro. Um problema, um aviso.
+
+### E o `delete` saiu do corpo do vigia
+
+Por causa de **uma linha** (limpar alerta normalizado), toda alteração no vigia
+disparava a confirmação de comando destrutivo do Supabase e virava "mandar o
+arquivo para o dono colar". Três vezes em três dias.
+
+O comando virou `alerta_resolvido()` — visível, com nome, mesmo efeito, mesmo
+lugar lógico. O que mudou é que o corpo do vigia não contém mais remoção, e as
+próximas regras entram sem depender de alguém estar acordado. Não é contornar a
+confirmação: é parar de pedi-la para a coisa errada.
+
+### A lição
+
+"Resolva" às vezes significa "prove que não dá, com precisão, e torne a espera
+observável". Nove endpoints testados, um diagnóstico citável num chamado de
+suporte, e recuperação automática em 10 minutos valem mais que uma gambiarra
+que arrisca a conta de afiliado.
