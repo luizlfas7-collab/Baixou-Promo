@@ -412,3 +412,77 @@ confirmação: é parar de pedi-la para a coisa errada.
 observável". Nove endpoints testados, um diagnóstico citável num chamado de
 suporte, e recuperação automática em 10 minutos valem mais que uma gambiarra
 que arrisca a conta de afiliado.
+
+## 26/11, parte 2: o pente fino desmentiu a minha própria conclusão
+
+Eu tinha dito ao dono que o 403 do ML era "política sobre o recurso, não tem o
+que fazer do nosso lado, abra chamado". Ele respondeu que **o painel de
+desenvolvedor não mostra nada de errado** e pediu pente fino — código, criação
+da aplicação, qualquer erro possível. Estava certo em insistir.
+
+### O que o registro da aplicação diz (GET /applications/{id}, HTTP 200)
+
+```
+active: true      blocked: false     disabled: false    partial_blocked: false
+origin: "ML"      sandbox_mode: false                   max_requests_per_hour: 18000
+date_created:         19/08/2026
+traceability_updated: 20/08/2026   <- última alteração
+certification_status: "not_certified"
+```
+
+**A aplicação não é tocada desde 20 de agosto.** Nada mudou do nosso lado em
+23/11. Não foi erro de código, não foi erro de criação, não foi credencial. A
+mudança veio deles.
+
+### A causa: os escopos são todos de VENDEDOR
+
+```
+urn:ml:mktp:offers        urn:ml:mktp:publish-sync    urn:ml:mktp:ads
+urn:ml:mktp:metrics       urn:ml:mktp:invoices        urn:ml:mktp:orders-shipments
+urn:ml:mktp:comunication  urn:ml:all:publish-sync     urn:ml:all:comunication
+urn:global:admin:info     urn:global:admin:oauth      urn:global:admin:users
+read   write   offline_access
+```
+
+Lidos pelo texto que o próprio ML exibe na tela de autorização: *"anúncios **da
+loja**"*, *"ofertas e cupons **de uma venda**"*, *"**suas** vendas e envios"*,
+*"faturamento"*, *"campanhas de publicidade"*. **Nenhum concede leitura de
+catálogo de terceiros** — que é a única coisa que o Baixou faz.
+
+### O teste que fecha a prova
+
+| chamada | resposta |
+|---|---|
+| `/users/{dono}` | **200** |
+| `/users/{dono}/items/search` | **200** — endpoint de item, funciona |
+| `/applications/{app}` | **200** |
+| `/sites/MLB` | **200** |
+| item, preço ou busca de **terceiros** | **403** |
+
+**Tudo sobre a própria conta responde; tudo sobre terceiros, não.** Até 23/11 o
+ML deixava passar. Naquele dia o PolicyAgent passou a exigir a permissão
+funcional correspondente, e a aplicação nunca teve essa permissão — ela só
+nunca tinha sido cobrada. Isso explica o timing exato sem precisar supor
+bloqueio nenhum.
+
+### A contradição que vale no chamado
+
+A API diz `certification_status: "not_certified"`. A tela de autorização exibe,
+com selo verde, **"CERTIFICADA — Certificada pelo Mercado Livre"**. As duas não
+podem estar certas, e no ML o acesso a recurso restrito costuma depender de
+certificação.
+
+### Aviso permanente sobre a sonda
+
+`GET /users/me` e `GET /users/{id}` retornam **nome, CPF, endereço e telefone**
+do dono. A sonda `acesso_fonte` grava o corpo da resposta. **Nunca apontar
+sonda, log ou diagnóstico para esses endpoints** — o `ensaio_get_ml` só deve
+bater em recurso de catálogo. Já está escrito no comentário da tabela.
+
+### A lição
+
+Eu fechei um diagnóstico cedo demais. "Política sobre o recurso" estava certo
+como mecanismo e **errado como conclusão**: virou "não há o que fazer" quando o
+certo era "falta uma permissão, e dá para pedir". A diferença entre as duas
+frases é o dono ficar parado ou ter três caminhos. Quando o usuário diz que a
+evidência dele não bate com a minha, a resposta é medir de novo, não repetir.
