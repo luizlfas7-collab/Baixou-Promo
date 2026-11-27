@@ -486,3 +486,63 @@ como mecanismo e **errado como conclusão**: virou "não há o que fazer" quando
 certo era "falta uma permissão, e dá para pedir". A diferença entre as duas
 frases é o dono ficar parado ou ter três caminhos. Quando o usuário diz que a
 evidência dele não bate com a minha, a resposta é medir de novo, não repetir.
+
+## 27/11: o ML não é mais fonte de preço, e a prova veio de fora
+
+O dono pediu revisão. A revisão encontrou o que faltava: **prova de terceiro.**
+
+O projeto público `Maxwbh/Lista_de_Presentes` abriu o issue #60 em **24/11/2026**,
+com logs de **23/11/2026 22:29 a 22:33**, registrando em **nove catálogos
+diferentes**:
+
+```
+Falha ao consultar /products/MLB45023857/items (HTTP 403)
+"code":"PA_UNAUTHORIZED_RESULT_FROM_POLICIES"
+"blocked_by":"PolicyAgent"
+```
+
+E o sintoma que eles registram é o nosso, palavra por palavra:
+**"Título: True, Preço: None, Imagem: True"**.
+
+Outra aplicação, outro dono, outro código, **mesmo endpoint, mesmo erro, mesmo
+dia**. Isso elimina permissão, certificação e credencial desta conta. O Mercado
+Livre fechou `/products/{catálogo}/items` para todos em 23/11/2026.
+
+Era o último endpoint com preço de terceiros: outros projetos já documentavam
+`/items/{id}`, `/items?ids=`, `/items/{id}/prices` e `/sites/MLB/search` em 403
+antes disso, usando `/products/{id}/items` como a saída que restava.
+
+### Quinze endpoints testados, nenhum com preço
+
+| 200, sem preço | 403 | outro |
+|---|---|---|
+| `/users/me`, `/users/{id}`, `/users/{id}/items/search`, `/applications/{id}`, `/sites/MLB`, `/products/{cat}`, `/products/search`, `/highlights/MLB/category/{id}`, `/highlights/MLB/item/{id}`, `/trends/MLB`, `/sites/MLB/domain_discovery/search` | `/products/{cat}/items` (com e sem parâmetros), `/items/{id}`, `/items?ids=`, `/sites/MLB/search?q=`, `/reviews/item/{id}` | `/products/{cat}/prices` → 500, `/catalog_listings/{cat}` → 404 |
+
+### A fonte foi desligada — e volta sozinha
+
+Ligada, ela queimava **~14.400 chamadas por dia** para receber 403, contra uma
+plataforma de quem ainda queremos favor, e mantinha **dois alarmes acesos para
+sempre**. Alarme permanentemente aceso não informa nada e ensina o dono a
+ignorar o painel: é o defeito que este projeto mais combate.
+
+O que **não** mudou: `acesso_bloqueado()` lê `acesso_fonte` e não filtra por
+fonte habilitada, então o alarme preciso continua — *"403 PolicyAgent desde
+23/11 17:22"* —, e a sonda segue de 10 em 10 minutos. Trocamos dois alarmes
+vagos e permanentes por um preciso.
+
+E `sondar_acesso_ml()` passou a **religar a fonte sozinha** quando vir 200,
+gravando em `erros` para aparecer no boletim. Se o ML reabrir às 3h de um
+domingo, a coleta recomeça às 3h10.
+
+Cuidado repetido de 26/11: a chave `entrega:mercado_livre_api_oficial` foi
+removida **antes** de desligar, senão o vigia mandaria *"NORMALIZADO após 4
+dias: FONTE MUDA"* e o dono leria que o ML voltou. O alarme não foi resolvido —
+foi substituído.
+
+### A lição
+
+Eu fechei esse diagnóstico três vezes, e nas três eu estava olhando só para
+dentro: nossa credencial, nossos escopos, nossa aplicação. **A evidência que
+decidiu veio de procurar se mais alguém tinha quebrado no mesmo dia.** Quando o
+sintoma é de política de plataforma, a primeira pergunta deveria ser "só eu?",
+e ela custa uma busca.
