@@ -81,7 +81,7 @@ Deno.serve(async (requisicao: Request) => {
 
   const { data: configuracao, error: erroConfiguracao } = await supabase
     .from("configuracoes")
-    .select("canal_padrao, destino_padrao")
+    .select("canal_padrao, destino_padrao, repasse_whatsapp_chat_id")
     .eq("id", 1)
     .single()
 
@@ -158,6 +158,8 @@ Deno.serve(async (requisicao: Request) => {
       identificadorWorker,
       destinoPermitido: configuracao.destino_padrao,
       canalPermitido: configuracao.canal_padrao,
+      // Nulo enquanto o operador nao ligar. O worker roda igual a antes.
+      destinoDoRepasse: configuracao.repasse_whatsapp_chat_id ?? null,
     })
 
     return responder(200, desfecho)

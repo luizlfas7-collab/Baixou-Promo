@@ -5,8 +5,40 @@ import {
   extrairUrls,
 } from "./afiliados.ts"
 
-/** Exigencia legal: todo post precisa se identificar como publicidade. */
-export const LINHA_DE_PUBLICIDADE = "PUBLICIDADE • LINK DE AFILIADO"
+/**
+ * Exigencia legal E contratual: todo post precisa se identificar como
+ * publicidade. CDC art. 36 (o consumidor tem que identificar de imediato),
+ * normas do CONAR, clausula 5.1 dos termos de Afiliados do Mercado Livre e o
+ * artigo da propria Central de Ajuda da Shopee sobre identificacao de conteudo
+ * publicitario. Falta de marcacao aparece entre os motivos de suspensao de
+ * conta — e perder a conta de afiliado e perder a receita inteira.
+ *
+ * O QUE A REGRA EXIGE e que o leitor perceba de imediato, nao um texto
+ * especifico. "(ANUNCIO)" diz exatamente isso, em portugues, em uma palavra.
+ *
+ * HISTORICO, porque o formato mudou duas vezes e os tres convivem no acervo:
+ *   ate 27/11  "PUBLICIDADE • LINK DE AFILIADO"  (todo o historico publicado)
+ *   11/11      "#publi" foi escrito a pedido do dono, mas NUNCA chegou a
+ *              producao: o coletor nao foi publicado entre 11 e 27/11
+ *   27/11      "(ANUNCIO)", a pedido do dono, e o que vai ao ar daqui em diante
+ */
+export const LINHA_DE_PUBLICIDADE = "(ANÚNCIO)"
+
+/**
+ * O que CONTA como aviso ao reconhecer um post ja montado.
+ *
+ * Inclui os textos antigos de proposito. Todo post ja publicado tem o bloco
+ * velho gravado no snapshot, e tanto a validacao quanto o repasse do WhatsApp
+ * localizam o aviso por linha exata: com uma string so, todo post do historico
+ * passaria a ser lido como "sem linha de publicidade" e o repasse morreria em
+ * cima de conteudo que ESTA em regra. Reconhecer e aceitar o historico; montar
+ * usa sempre LINHA_DE_PUBLICIDADE.
+ */
+const AVISOS_ACEITOS = [
+  LINHA_DE_PUBLICIDADE,
+  "#publi",
+  "PUBLICIDADE • LINK DE AFILIADO",
+] as const
 
 const LIMITE_BYTES = 32 * 1024
 const LIMITE_TEXTO = 4096
@@ -58,7 +90,12 @@ function normalizar(linha: string): string {
     .toUpperCase()
 }
 
-const PUBLICIDADE_NORMALIZADA = normalizar(LINHA_DE_PUBLICIDADE)
+const AVISOS_NORMALIZADOS = AVISOS_ACEITOS.map(normalizar)
+
+/** Esta linha e um aviso de publicidade, no formato novo ou no antigo? */
+export function ehLinhaDePublicidade(linha: string): boolean {
+  return AVISOS_NORMALIZADOS.includes(normalizar(linha))
+}
 
 function ehObjeto(valor: unknown): valor is Record<string, unknown> {
   return typeof valor === "object" && valor !== null && !Array.isArray(valor)
@@ -129,9 +166,7 @@ export function validarPayloadTelegram(entrada: unknown): Resultado {
     }
   }
 
-  const temPublicidade = texto
-    .split("\n")
-    .some((linha) => normalizar(linha) === PUBLICIDADE_NORMALIZADA)
+  const temPublicidade = texto.split("\n").some(ehLinhaDePublicidade)
 
   if (!temPublicidade) {
     erros.push(`Falta a linha obrigatoria "${LINHA_DE_PUBLICIDADE}"`)
