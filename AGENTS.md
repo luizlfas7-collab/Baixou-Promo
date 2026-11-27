@@ -65,13 +65,17 @@ O padrão aqui é: o que foi medido, o que isso provou, o que mudou.
   e **volta sozinha**: `sondar_acesso_ml()` roda a cada 10 min e religa ao ver 200.
 - **Shopee: única fonte ativa.** Oscila entre 40% e 80% da capacidade normal
   (âncora fixa: 2400 itens/hora). Tem entregado 20 a 27 posts/dia.
-- **Aviso de publicidade: `(ANÚNCIO)`** desde 27/11. O worker (v12) aceita os
-  três formatos já usados; o coletor da Shopee **ainda não foi publicado** e
-  segue produzindo o bloco antigo.
-- **Pendente de publicação:** coletor da Shopee (traz `(ANÚNCIO)` e passa a
-  gravar os códigos de erro da Shopee). Coletor do ML parado na v19.
-- **Perda conhecida:** ~11 ofertas aprovadas/dia vencem antes de publicar, por
-  rajada acima de 6/h. Decisão do dono pendente.
+- **Aviso de publicidade: `(ANÚNCIO)`** desde 27/11, no ar. Worker v12 e
+  coletor da Shopee v13 publicados, nessa ordem. O worker aceita os três
+  formatos já usados; o coletor produz só o novo.
+- **Códigos de erro da Shopee são gravados** desde a v13 do coletor
+  (`metadados.codigos_de_falha`). O primeiro medido foi `shopee_10000`, que é
+  o System Error intermitente da API deles.
+- **Fila: intervalo 360s, teto 10/h** desde 27/11. Era 600s/6h e perdia ~11
+  ofertas aprovadas por dia para a rajada. O TTL da aprovação segue 3600s e
+  **não se mexe** nele: é a proteção contra publicar preço velho.
+- **Pendente de publicação:** coletor do ML, parado na v19 — sem urgência
+  enquanto a fonte estiver desligada.
 
 ## Onde está escrito o resto
 
