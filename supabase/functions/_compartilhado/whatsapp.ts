@@ -129,8 +129,9 @@ export function montarRepasseWhatsapp(payload: PayloadTelegram): ResultadoRepass
   // A linha de publicidade e exigencia legal e vale nos dois canais. Ela ja
   // vem no texto do Telegram; o link entra ANTES dela para que o aviso continue
   // sendo a ultima coisa que o leitor ve.
-  // Aceita o formato novo (#publi) e o antigo: post publicado antes de 11/11
-  // tem o bloco velho no snapshot e continua em regra. Ver AVISOS_ACEITOS.
+  // Aceita os tres formatos que ja existiram: "(ANUNCIO)" a partir de 27/11,
+  // "#publi" (escrito em 11/11, nunca publicado) e o bloco em caixa alta, que
+  // e o que TODO post do acervo tem gravado no snapshot. Ver AVISOS_ACEITOS.
   const linhas = corpo.split("\n")
   const ondeEstaOAviso = linhas.findIndex((l) => ehLinhaDePublicidade(l.trim()))
 

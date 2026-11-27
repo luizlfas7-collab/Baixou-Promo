@@ -14,16 +14,20 @@ import {
  * conta — e perder a conta de afiliado e perder a receita inteira.
  *
  * O QUE A REGRA EXIGE e que o leitor perceba de imediato, nao um texto
- * especifico. Por isso em 11/11, a pedido do dono, o bloco em caixa alta
- * ("PUBLICIDADE • LINK DE AFILIADO") deu lugar a hashtag curta — que e uma das
- * marcacoes sugeridas pela propria Shopee. Mesma conformidade, post mais limpo.
+ * especifico. "(ANUNCIO)" diz exatamente isso, em portugues, em uma palavra.
+ *
+ * HISTORICO, porque o formato mudou duas vezes e os tres convivem no acervo:
+ *   ate 27/11  "PUBLICIDADE • LINK DE AFILIADO"  (todo o historico publicado)
+ *   11/11      "#publi" foi escrito a pedido do dono, mas NUNCA chegou a
+ *              producao: o coletor nao foi publicado entre 11 e 27/11
+ *   27/11      "(ANUNCIO)", a pedido do dono, e o que vai ao ar daqui em diante
  */
-export const LINHA_DE_PUBLICIDADE = "#publi"
+export const LINHA_DE_PUBLICIDADE = "(ANÚNCIO)"
 
 /**
  * O que CONTA como aviso ao reconhecer um post ja montado.
  *
- * Inclui o texto antigo de proposito. Post publicado antes de 11/11 tem o bloco
+ * Inclui os textos antigos de proposito. Todo post ja publicado tem o bloco
  * velho gravado no snapshot, e tanto a validacao quanto o repasse do WhatsApp
  * localizam o aviso por linha exata: com uma string so, todo post do historico
  * passaria a ser lido como "sem linha de publicidade" e o repasse morreria em
@@ -32,6 +36,7 @@ export const LINHA_DE_PUBLICIDADE = "#publi"
  */
 const AVISOS_ACEITOS = [
   LINHA_DE_PUBLICIDADE,
+  "#publi",
   "PUBLICIDADE • LINK DE AFILIADO",
 ] as const
 
